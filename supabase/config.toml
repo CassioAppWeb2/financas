@@ -1,0 +1,3 @@
+# Configuração para a CLI do Supabase (opcional)
+[functions.assistant]
+verify_jwt = false   # o app envia o token do usuário (validado na função); a Meta e o Telegram são validados por assinatura/segredo

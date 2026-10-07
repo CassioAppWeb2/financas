@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0f6b4f"/>
+  <g transform="translate(76.8 76.8) scale(.7)">
+  <path d="M136 150h240a40 40 0 0 1 40 40v120a40 40 0 0 1-40 40H246l-70 56v-56h-40a40 40 0 0 1-40-40V190a40 40 0 0 1 40-40z" fill="#fff"/>
+  <text x="256" y="292" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="118" fill="#0f6b4f">R$</text></g>
+</svg>

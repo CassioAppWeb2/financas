@@ -1,0 +1,12 @@
+{
+  "name": "assistente-financeiro",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Assistente Financeiro Pessoal Inteligente — Fase 1",
+  "scripts": {
+    "db:reset": "./dev/reset_db.sh",
+    "dev": "bun dev/server.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit --allowImportingTsExtensions --target es2022 --module esnext --moduleResolution bundler --lib es2023,dom --skipLibCheck supabase/functions/assistant/index.ts"
+  }
+}
