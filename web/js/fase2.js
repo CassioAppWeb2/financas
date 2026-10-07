@@ -466,7 +466,8 @@ export async function reportsView(page) {
   const mesUnico = r.inicio.slice(0, 7) === r.fim.slice(0, 7);
   const anoAtual = rep.ano || String(C.state.boot.hoje).slice(0, 4);
   const membros = C.family() ? C.state.boot.familia.membros : [];
-  const membroNome = (x) => x.membro_id === null ? "Família (compartilhado)" : membros.find((mm) => mm.id === x.membro_id)?.eu ? "Você" : x.membro;
+  const membroNome = (x) => x.membro === "Família" ? "Família (compartilhado)" : x.membro;
+  void membros;
   page.innerHTML = `
     <div class="page-head no-print"><h1>Relatórios</h1><div class="row">
       <button class="btn" id="xCsv">⬇️ CSV</button><button class="btn" id="xXls">⬇️ Excel</button><button class="btn" id="xPdf">⬇️ PDF</button></div></div>
