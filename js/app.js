@@ -113,12 +113,15 @@ function shell(route) {
   return $("#page");
 }
 
-async function router() {
+async function router(opts) {
   if (!api.configured()) return setupView();
   if (!api.getSession()) return authView();
+  const silent = opts?.silent === true && $("#page");
   const route = location.hash.replace(/^#\/?/, "");
-  const page = shell(route);
-  page.innerHTML = `<div class="empty">Carregando…</div>`;
+  viewRefresh = null;
+  const page = silent ? $("#page") : shell(route);
+  const y = window.scrollY, py = page.scrollTop;
+  if (!silent) page.innerHTML = `<div class="empty">Carregando…</div>`;
   try {
     await loadBoot();
     if (route === "") await dashboard(page);
@@ -130,10 +133,41 @@ async function router() {
     else if (route.startsWith("mais")) more(page);
     else if (route.startsWith("em-breve")) soon(page, route.split("/")[1]);
     else location.hash = "#/";
+    if (silent && !route.startsWith("assistente")) { window.scrollTo(0, y); page.scrollTop = py; }
   } catch (e) {
-    page.innerHTML = `<div class="empty"><div class="big">⚠️</div><p>${esc(e.message)}</p><button class="btn" onclick="location.reload()">Tentar de novo</button></div>`;
+    if (!silent) page.innerHTML = `<div class="empty"><div class="big">⚠️</div><p>${esc(e.message)}</p><button class="btn" onclick="location.reload()">Tentar de novo</button></div>`;
   }
 }
+
+// ---------------------------------------------------------------- atualização automática
+// A cada 15 s (e sempre que o app volta para a tela) pergunta ao banco se algo mudou —
+// por exemplo, um gasto registrado pelo Telegram — e atualiza a tela sozinho.
+let viewRefresh = null, lastChanges = null, refreshing = false, chatSending = false;
+async function markSeen() { try { lastChanges = await api.rpc("app_changes"); } catch { /* sem conexão */ } }
+async function checkChanges() {
+  if (refreshing || document.hidden || !api.configured() || !api.getSession()) return;
+  let v;
+  try { v = await api.rpc("app_changes"); } catch { return; }
+  const prev = lastChanges;
+  if (!prev) { lastChanges = v; return; }
+  const dados = prev.lancamentos !== v.lancamentos || prev.cadastros !== v.cadastros;
+  const conversa = prev.chat !== v.chat;
+  if (!dados && !conversa) return;
+  if (document.querySelector(".modal-back")) return; // espera fechar o formulário aberto
+  const route = location.hash.replace(/^#\/?/, "");
+  const noChat = route.startsWith("assistente");
+  if (noChat && (chatSending || $("#txt")?.value)) return;
+  lastChanges = v;
+  if (prev.cadastros !== v.cadastros || prev.lancamentos !== v.lancamentos) state.boot = null;
+  refreshing = true;
+  try {
+    if (noChat) { if (conversa) await router({ silent: true }); }
+    else if (dados) { if (viewRefresh) { await loadBoot(); await viewRefresh(); } else await router({ silent: true }); }
+  } finally { refreshing = false; }
+}
+setInterval(checkChanges, 15000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkChanges(); });
+window.addEventListener("focus", () => checkChanges());
 
 // ---------------------------------------------------------------- telas sem login
 function setupView() {
@@ -370,8 +404,8 @@ async function transactions(page) {
     <div class="card"><div class="list" id="txList"></div></div>
     <button class="fab" id="fab" aria-label="Novo lançamento">+</button>`;
   let data = [];
-  const load = async () => {
-    $("#txList").innerHTML = `<div class="empty">Carregando…</div>`;
+  const load = async (quiet = false) => {
+    if (!quiet) $("#txList").innerHTML = `<div class="empty">Carregando…</div>`;
     const r = await api.rpc("app_transactions", { mes: state.month, ...filt, membro_id: $("#fMemb")?.value || "" });
     data = r.itens;
     const rec = data.filter((t) => t.tipo === "receita").reduce((s, t) => s + t.valor_cents, 0);
@@ -405,6 +439,7 @@ async function transactions(page) {
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     a.download = `lancamentos-${state.month}.csv`; a.click();
   };
+  viewRefresh = () => load(true);
   await load();
 }
 
@@ -454,7 +489,7 @@ async function chat(page) {
   let busy = false;
   async function send(text, type = "text", extra = {}) {
     if (busy || (!text.trim() && !extra.audio_base64)) return;
-    busy = true;
+    busy = true; chatSending = true;
     if (text.trim()) box.insertAdjacentHTML("beforeend", bubble({ role: "user", content: text, channel: "app", message_type: type, created_at: new Date().toISOString() }));
     box.insertAdjacentHTML("beforeend", `<div class="typing" id="typing"><i></i><i></i><i></i></div>`);
     scroll();
@@ -467,7 +502,8 @@ async function chat(page) {
       $("#typing")?.remove();
       box.insertAdjacentHTML("beforeend", bubble({ role: "assistant", content: `⚠️ ${e.message}` }));
     }
-    busy = false; scroll();
+    busy = false; chatSending = false; scroll();
+    markSeen();
   }
   $("#composer").onsubmit = (e) => { e.preventDefault(); const v = txt.value; txt.value = ""; txt.style.height = ""; send(v); };
   txt.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#composer").requestSubmit(); } });
