@@ -18,6 +18,31 @@ export interface AiConfig {
 
 const GEMINI_URL = (model: string) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
+// Modelos tentados em ordem: o Google aposenta modelos com frequência,
+// então se um responder 404 (inexistente) ou 429/403 (sem cota grátis), tenta o próximo.
+const GEMINI_FALLBACK = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-2.5-flash"];
+let geminiWorking: string | undefined;
+
+export async function geminiCall(cfg: AiConfig, body: unknown, timeoutMs: number): Promise<{ data: any; model: string }> {
+  const f = cfg.fetch ?? fetch;
+  const list = [...new Set([geminiWorking, cfg.geminiModel, ...GEMINI_FALLBACK].filter(Boolean) as string[])];
+  let last = "";
+  for (const model of list) {
+    const res = await f(GEMINI_URL(model), {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": cfg.geminiKey! },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (res.ok) { geminiWorking = model; return { data: await res.json(), model }; }
+    last = `Gemini ${res.status} (${model})`;
+    console.warn(last);
+    if (![403, 404, 429].includes(res.status)) break;
+    if (geminiWorking === model) geminiWorking = undefined;
+  }
+  throw new Error(last || "Gemini indisponível");
+}
+
 function buildPrompt(ctx: UserContext): string {
   const cats = ctx.categorias.map((c) => `${c.tipo}: ${c.nome}${c.subcategorias.length ? ` (${c.subcategorias.join(", ")})` : ""}`).join("\n");
   return `Você interpreta mensagens de um app de finanças pessoais no Brasil. Hoje é ${ctx.hoje} (fuso America/Sao_Paulo).
@@ -81,20 +106,11 @@ export function sanitize(raw: any, text: string, ctx: UserContext): Interpretati
 
 export async function interpretWithGemini(text: string, ctx: UserContext, cfg: AiConfig): Promise<Interpretation | null> {
   if (!cfg.geminiKey) return null;
-  const f = cfg.fetch ?? fetch;
-  const model = cfg.geminiModel || "gemini-2.5-flash";
-  const res = await f(GEMINI_URL(model), {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": cfg.geminiKey },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: buildPrompt(ctx) }] },
-      contents: [{ role: "user", parts: [{ text }] }],
-      generationConfig: { responseMimeType: "application/json", temperature: 0 },
-    }),
-    signal: AbortSignal.timeout(12000),
-  });
-  if (!res.ok) throw new Error(`Gemini ${res.status}`);
-  const data = await res.json();
+  const { data, model } = await geminiCall(cfg, {
+    systemInstruction: { parts: [{ text: buildPrompt(ctx) }] },
+    contents: [{ role: "user", parts: [{ text }] }],
+    generationConfig: { responseMimeType: "application/json", temperature: 0 },
+  }, 12000);
   const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!raw) return null;
   const parsed = sanitize(JSON.parse(raw), text, ctx);
@@ -154,20 +170,12 @@ export async function transcribeAudio(bytes: Uint8Array, mime: string, cfg: AiCo
     return { text: (await r.json()).text ?? "", provider: "openai-whisper" };
   }
   if (!cfg.geminiKey) throw new Error("GEMINI_API_KEY não configurada");
-  const model = cfg.geminiModel || "gemini-2.5-flash";
-  const r = await f(GEMINI_URL(model), {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": cfg.geminiKey },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [
-        { text: "Transcreva fielmente este áudio em português do Brasil. Responda apenas com a transcrição, sem comentários." },
-        { inlineData: { mimeType: mime.split(";")[0], data: toBase64(bytes) } },
-      ] }],
-      generationConfig: { temperature: 0 },
-    }),
-    signal: AbortSignal.timeout(30000),
-  });
-  if (!r.ok) throw new Error(`Gemini STT ${r.status}`);
-  const d = await r.json();
+  const { data: d, model } = await geminiCall(cfg, {
+    contents: [{ role: "user", parts: [
+      { text: "Transcreva fielmente este áudio em português do Brasil. Responda apenas com a transcrição, sem comentários." },
+      { inlineData: { mimeType: mime.split(";")[0], data: toBase64(bytes) } },
+    ] }],
+    generationConfig: { temperature: 0 },
+  }, 30000);
   return { text: String(d?.candidates?.[0]?.content?.parts?.[0]?.text ?? "").trim(), provider: `gemini:${model}` };
 }
