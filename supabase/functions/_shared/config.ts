@@ -14,6 +14,7 @@ export const aiConfig: AiConfig = {
   geminiKey: env("GEMINI_API_KEY"),
   geminiModel: env("GEMINI_MODEL"),
   openaiKey: env("OPENAI_API_KEY"),
+  groqKey: env("GROQ_API_KEY"),
   sttProvider: env("STT_PROVIDER") as AiConfig["sttProvider"],
 };
 

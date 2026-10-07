@@ -12,6 +12,7 @@ export interface AiConfig {
   geminiKey?: string;
   geminiModel?: string;      // padrão: gemini-2.5-flash
   openaiKey?: string;        // opcional (Whisper / GPT)
+  groqKey?: string;          // opcional: Whisper gratuito e rápido na Groq
   sttProvider?: "gemini" | "openai";
   fetch?: typeof fetch;
 }
@@ -20,7 +21,7 @@ const GEMINI_URL = (model: string) => `https://generativelanguage.googleapis.com
 
 // Modelos tentados em ordem: o Google aposenta modelos com frequência,
 // então se um responder 404 (inexistente) ou 429/403 (sem cota grátis), tenta o próximo.
-const GEMINI_FALLBACK = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-flash-latest", "gemini-3.5-flash", "gemini-2.5-flash"];
+const GEMINI_FALLBACK = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-flash-latest", "gemini-3.5-flash-lite"];
 let geminiWorking: string | undefined;
 
 export async function geminiCall(cfg: AiConfig, body: unknown, timeoutMs: number): Promise<{ data: any; model: string }> {
@@ -163,20 +164,32 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(s);
 }
 
+async function whisper(url: string, key: string, model: string, bytes: Uint8Array, mime: string, f: typeof fetch): Promise<string> {
+  const form = new FormData();
+  form.append("file", new Blob([bytes as unknown as ArrayBuffer], { type: mime }), "audio." + (mime.split("/")[1]?.split(";")[0] || "ogg"));
+  form.append("model", model);
+  form.append("language", "pt");
+  const r = await f(url, { method: "POST", headers: { authorization: `Bearer ${key}` }, body: form, signal: AbortSignal.timeout(30000) });
+  if (!r.ok) throw new Error(`Whisper ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  return String((await r.json()).text ?? "").trim();
+}
+
 export async function transcribeAudio(bytes: Uint8Array, mime: string, cfg: AiConfig): Promise<Transcription> {
   const f = cfg.fetch ?? fetch;
+  if (cfg.groqKey) {
+    try {
+      const text = await whisper("https://api.groq.com/openai/v1/audio/transcriptions", cfg.groqKey, "whisper-large-v3-turbo", bytes, mime, f);
+      return { text, provider: "groq-whisper" };
+    } catch (e) {
+      console.warn("Groq falhou:", (e as Error).message);
+      if (!cfg.geminiKey && !cfg.openaiKey) throw e;
+    }
+  }
   const provider = cfg.sttProvider ?? (cfg.openaiKey && !cfg.geminiKey ? "openai" : "gemini");
   if (provider === "openai") {
     if (!cfg.openaiKey) throw new Error("OPENAI_API_KEY não configurada");
-    const form = new FormData();
-    form.append("file", new Blob([bytes as unknown as ArrayBuffer], { type: mime }), "audio." + (mime.split("/")[1]?.split(";")[0] || "ogg"));
-    form.append("model", "whisper-1");
-    form.append("language", "pt");
-    const r = await f("https://api.openai.com/v1/audio/transcriptions", {
-      method: "POST", headers: { authorization: `Bearer ${cfg.openaiKey}` }, body: form, signal: AbortSignal.timeout(30000),
-    });
-    if (!r.ok) throw new Error(`Whisper ${r.status}`);
-    return { text: (await r.json()).text ?? "", provider: "openai-whisper" };
+    const text = await whisper("https://api.openai.com/v1/audio/transcriptions", cfg.openaiKey, "whisper-1", bytes, mime, f);
+    return { text, provider: "openai-whisper" };
   }
   if (!cfg.geminiKey) throw new Error("GEMINI_API_KEY não configurada");
   const { data: d, model } = await geminiCall(cfg, {
@@ -185,6 +198,6 @@ export async function transcribeAudio(bytes: Uint8Array, mime: string, cfg: AiCo
       { inlineData: { mimeType: mime.split(";")[0], data: toBase64(bytes) } },
     ] }],
     generationConfig: { temperature: 0 },
-  }, 25000);
+  }, 20000);
   return { text: String(d?.candidates?.[0]?.content?.parts?.[0]?.text ?? "").trim(), provider: `gemini:${model}` };
 }
