@@ -23,9 +23,9 @@ const GEMINI_URL = (model: string) => `https://generativelanguage.googleapis.com
 // modelo lento, a pergunta vai para vários modelos AO MESMO TEMPO e vale a primeira resposta boa.
 const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-flash-latest"];
 
-export async function geminiCall(cfg: AiConfig, body: unknown, timeoutMs: number): Promise<{ data: any; model: string }> {
+export async function geminiCall(cfg: AiConfig, body: unknown, timeoutMs: number, models?: string[]): Promise<{ data: any; model: string }> {
   const f = cfg.fetch ?? fetch;
-  const list = [...new Set([cfg.geminiModel, ...GEMINI_MODELS].filter(Boolean) as string[])];
+  const list = models ?? [...new Set([cfg.geminiModel, ...GEMINI_MODELS].filter(Boolean) as string[])];
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const payload = JSON.stringify(body);
@@ -215,4 +215,95 @@ export async function transcribeAudio(bytes: Uint8Array, mime: string, cfg: AiCo
     generationConfig: { temperature: 0 },
   }, 40000);
   return { text: String(d?.candidates?.[0]?.content?.parts?.[0]?.text ?? "").trim(), provider: `gemini:${model}` };
+}
+
+// ---------------------------------------------------------------------------
+// Leitura de fatura / extrato em PDF ou foto (Gemini)
+// A IA só LÊ o documento; nada é lançado sem a confirmação da pessoa.
+// ---------------------------------------------------------------------------
+export interface StatementItem { data: string; descricao: string; valor: number; parcela?: string; categoria?: string; }
+export interface Statement {
+  tipo: "fatura_cartao" | "extrato_conta";
+  banco?: string;
+  cartao?: string;
+  final_cartao?: string;
+  vencimento?: string;
+  fechamento?: string;
+  total?: number;
+  itens: StatementItem[];
+  model?: string;
+}
+
+export class StatementError extends Error { constructor(public code: "senha" | "ilegivel" | "sem_ia" | "grande", msg: string) { super(msg); } }
+
+/** PDF com senha (criptografado) — a IA não consegue ler. */
+export function isEncryptedPdf(bytes: Uint8Array): boolean {
+  const tail = new TextDecoder("latin1").decode(bytes.subarray(Math.max(0, bytes.length - 4096)));
+  const head = new TextDecoder("latin1").decode(bytes.subarray(0, Math.min(bytes.length, 400000)));
+  return /\/Encrypt\s/.test(tail) || /\/Encrypt\s+\d+\s+\d+\s+R/.test(head);
+}
+
+function statementPrompt(ctx: UserContext): string {
+  const cats = ctx.categorias.filter((c) => c.tipo === "despesa").map((c) => `${c.nome}${c.subcategorias.length ? ` (${c.subcategorias.join(", ")})` : ""}`).join("; ");
+  return `Você lê faturas de cartão de crédito e extratos bancários brasileiros. Hoje é ${ctx.hoje}.
+Responda SOMENTE com JSON neste formato:
+{"tipo":"fatura_cartao"|"extrato_conta","banco":"nome do banco/emissor","cartao":"nome do cartão se aparecer","final_cartao":"4 últimos dígitos se aparecerem",
+ "vencimento":"AAAA-MM-DD (fatura)","fechamento":"AAAA-MM-DD se aparecer","total":número (total da fatura ou null),
+ "itens":[{"data":"AAAA-MM-DD","descricao":"texto do lançamento como está","valor":número,"parcela":"3/10 se for parcela","categoria":"uma das categorias abaixo"}]}
+Regras:
+- Liste TODOS os lançamentos da fatura/extrato, de todas as páginas e de todos os cartões adicionais. Não invente nada que não esteja no documento.
+- Em FATURA: compras, parcelas, tarifas, juros e IOF com valor POSITIVO; pagamentos, estornos e créditos com valor NEGATIVO. Não inclua linhas de resumo, subtotais, "total da fatura anterior", limites ou parcelamentos futuros.
+- Em EXTRATO de conta: saídas NEGATIVAS e entradas POSITIVAS. Ignore linhas de saldo.
+- Datas sem ano: use o ano coerente com o vencimento/período do documento.
+- valor em reais como número (1.234,56 -> 1234.56).
+- categoria: escolha a mais provável entre: ${cats}. Se não souber, use "Outros".`;
+}
+
+export async function extractStatement(bytes: Uint8Array, mime: string, ctx: UserContext, cfg: AiConfig): Promise<Statement> {
+  if (!cfg.geminiKey) throw new StatementError("sem_ia", "Leitura de PDF não configurada no servidor.");
+  if (bytes.length > 15_000_000) throw new StatementError("grande", "Arquivo muito grande (máximo 15 MB).");
+  const m = mime.split(";")[0].toLowerCase();
+  if (m === "application/pdf" && isEncryptedPdf(bytes)) throw new StatementError("senha", "PDF protegido por senha.");
+  const body = {
+    systemInstruction: { parts: [{ text: statementPrompt(ctx) }] },
+    contents: [{ role: "user", parts: [{ inlineData: { mimeType: m, data: toBase64(bytes) } }, { text: "Extraia os lançamentos deste documento." }] }],
+    generationConfig: { responseMimeType: "application/json", temperature: 0 },
+  };
+  const all = [...new Set([cfg.geminiModel, ...GEMINI_MODELS].filter(Boolean) as string[])];
+  let r: { data: any; model: string };
+  try { r = await geminiCall(cfg, body, 70000, all.filter((x) => !/lite/.test(x))); }
+  catch { r = await geminiCall(cfg, body, 45000, all.filter((x) => /lite/.test(x))); }
+  let raw: any;
+  try { raw = JSON.parse(r.data.candidates[0].content.parts[0].text); } catch { throw new StatementError("ilegivel", "Não consegui ler o documento."); }
+  const st = sanitizeStatement(raw, ctx);
+  st.model = r.model;
+  if (!st.itens.length) throw new StatementError("ilegivel", "Não encontrei lançamentos no documento.");
+  return st;
+}
+
+/** Valida o JSON da IA: datas, valores e categorias que existem no cadastro. */
+export function sanitizeStatement(raw: any, ctx: UserContext): Statement {
+  const isDate = (s: unknown) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
+  const cats = new Map(ctx.categorias.filter((c) => c.tipo === "despesa").map((c) => [norm(c.nome), c.nome]));
+  const st: Statement = {
+    tipo: raw?.tipo === "extrato_conta" ? "extrato_conta" : "fatura_cartao",
+    banco: typeof raw?.banco === "string" ? raw.banco.slice(0, 40) : undefined,
+    cartao: typeof raw?.cartao === "string" ? raw.cartao.slice(0, 40) : undefined,
+    final_cartao: typeof raw?.final_cartao === "string" ? raw.final_cartao.replace(/\D/g, "").slice(-4) || undefined : undefined,
+    vencimento: isDate(raw?.vencimento) ? raw.vencimento : undefined,
+    fechamento: isDate(raw?.fechamento) ? raw.fechamento : undefined,
+    total: Number.isFinite(Number(raw?.total)) && raw?.total !== null ? Math.round(Number(raw.total) * 100) / 100 : undefined,
+    itens: [],
+  };
+  for (const it of Array.isArray(raw?.itens) ? raw.itens.slice(0, 1500) : []) {
+    const v = Number(it?.valor);
+    if (!isDate(it?.data) || !Number.isFinite(v) || v === 0 || Math.abs(v) > 1e8) continue;
+    const parcela = typeof it?.parcela === "string" && /^\d{1,2}\/\d{1,2}$/.test(it.parcela.trim()) ? it.parcela.trim() : undefined;
+    st.itens.push({
+      data: it.data, valor: Math.round(v * 100) / 100, parcela,
+      descricao: String(it?.descricao ?? "").replace(/\s+/g, " ").trim().slice(0, 100) || "Lançamento",
+      categoria: cats.get(norm(String(it?.categoria ?? ""))),
+    });
+  }
+  return st;
 }

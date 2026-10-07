@@ -2,8 +2,8 @@
 // Nenhuma regra financeira aqui — só transporte.
 
 import type { EngineDb, IncomingMessage } from "./types.ts";
-import { handleMessage } from "./assistant.ts";
-import { transcribeAudio, type AiConfig } from "./ai.ts";
+import { handleMessage, readStatement, type AssistantDeps } from "./assistant.ts";
+import { transcribeAudio, StatementError, type AiConfig } from "./ai.ts";
 
 export const CORS = {
   "access-control-allow-origin": "*",
@@ -20,6 +20,7 @@ const json = (body: unknown, status = 200) =>
 export interface AppDeps {
   db: EngineDb;
   ai?: AiConfig;
+  extract?: AssistantDeps["extract"];
   getUserId: (token: string) => Promise<string | null>;
 }
 
@@ -46,6 +47,23 @@ export function createAppHandler(deps: AppDeps) {
 
     let body: any;
     try { body = await req.json(); } catch { return json({ error: "JSON inválido" }, 400); }
+
+    // Tela "Importar extrato": lê PDF/foto da fatura e devolve os itens para a prévia (nada é gravado aqui)
+    if (body?.acao === "ler_extrato") {
+      if (typeof body.arquivo_base64 !== "string" || body.arquivo_base64.length > 21_000_000) return json({ error: "Arquivo ausente ou grande demais (máximo 15 MB)." }, 400);
+      const mime = String(body.mime ?? "application/pdf");
+      if (!/^(application\/pdf|image\/(jpeg|png|webp|heic|heif))$/.test(mime)) return json({ error: "Envie a fatura em PDF ou foto (JPG/PNG)." }, 400);
+      try {
+        const bytes = Uint8Array.from(atob(body.arquivo_base64), (ch) => ch.charCodeAt(0));
+        return json(await readStatement(bytes, mime, userId, { db: deps.db, ai: deps.ai, extract: deps.extract }));
+      } catch (e) {
+        const code = e instanceof StatementError ? e.code : "";
+        const msg = code === "senha" ? "Este PDF tem senha. Abra-o, toque em Imprimir → Salvar como PDF e envie o arquivo novo (fica sem senha)."
+          : code === "sem_ia" ? "A leitura de PDF ainda não está configurada no servidor."
+          : `Não consegui ler o documento (${(e as Error).message}).`;
+        return json({ error: msg, codigo: code || "erro" }, 422);
+      }
+    }
 
     let content = typeof body?.text === "string" ? body.text.slice(0, 2000) : "";
     let type: IncomingMessage["type"] = body?.type === "audio" ? "audio" : "text";
@@ -254,15 +272,21 @@ export interface TelegramDeps {
   waitUntil?: (p: Promise<unknown>) => void;
 }
 
-export interface TgMessage { update_id: number; chat_id: string; username?: string; text?: string; file_id?: string; mime?: string; }
+export interface TgMessage {
+  update_id: number; chat_id: string; username?: string; text?: string; file_id?: string; mime?: string;
+  doc_id?: string; doc_mime?: string; doc_name?: string; doc_size?: number;
+}
 
 export function parseTelegramUpdate(u: any): TgMessage | null {
   const m = u?.message ?? u?.edited_message;
   if (!m?.chat?.id) return null;
   const media = m.voice ?? m.audio;
+  const photo = Array.isArray(m.photo) && m.photo.length ? m.photo[m.photo.length - 1] : undefined;
+  const doc = m.document ?? (photo ? { file_id: photo.file_id, mime_type: "image/jpeg", file_name: "foto.jpg", file_size: photo.file_size } : undefined);
   return {
     update_id: u.update_id, chat_id: String(m.chat.id), username: m.from?.username,
     text: m.text ?? m.caption, file_id: media?.file_id, mime: media?.mime_type ?? (m.voice ? "audio/ogg" : undefined),
+    doc_id: doc?.file_id, doc_mime: doc?.mime_type, doc_name: doc?.file_name, doc_size: doc?.file_size,
   };
 }
 
@@ -313,6 +337,26 @@ export function createTelegramHandler(deps: TelegramDeps) {
     }
     if (/^\/start\b/i.test(text)) { await send(m.chat_id, "Você já está conectado. 🙂 Me conte um gasto ou pergunte sobre suas finanças."); return; }
     if (rateLimited(user_id)) { await send(m.chat_id, "Muitas mensagens em pouco tempo. Aguarde um minuto. 🙏"); return; }
+
+    if (m.doc_id) {
+      const mime = (m.doc_mime ?? "").toLowerCase();
+      const pdf = mime === "application/pdf" || /\.pdf$/i.test(m.doc_name ?? "");
+      if (!pdf && !/^image\/(jpeg|png|webp)$/.test(mime)) {
+        await send(m.chat_id, "Por enquanto leio faturas e extratos em *PDF* ou *foto*. Para outros arquivos (OFX/CSV), use *Cartões → Importar fatura* no app.");
+        return;
+      }
+      if ((m.doc_size ?? 0) > 15_000_000) { await send(m.chat_id, "Esse arquivo é grande demais (máximo 15 MB)."); return; }
+      await send(m.chat_id, "📄 Recebi! Estou lendo os lançamentos… isso pode levar até 1 minuto.");
+      let bytes: Uint8Array;
+      try { bytes = await download(m.doc_id); } catch { await send(m.chat_id, "Não consegui baixar o arquivo do Telegram. Pode mandar de novo?"); return; }
+      const reply = await handleMessage(
+        { user_id, channel: "telegram", type: "text", content: `📄 ${m.doc_name ?? "documento"}${text ? ` — ${text}` : ""}`, timestamp: new Date().toISOString(),
+          media_ref: m.doc_id, document: { bytes, mime: pdf ? "application/pdf" : mime, name: m.doc_name } },
+        { db: deps.db, ai: deps.ai },
+      );
+      await send(m.chat_id, reply.reply);
+      return;
+    }
 
     let content = text.replace(/^\/(ajuda|help)\b/i, "ajuda");
     let type: IncomingMessage["type"] = "text";

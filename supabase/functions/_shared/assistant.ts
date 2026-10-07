@@ -5,14 +5,21 @@
 // Ele não grava nada diretamente: toda operação passa pelo Motor Financeiro (fe_*).
 
 import type { AssistantReply, Card, EngineDb, IncomingMessage, Interpretation, UserContext } from "./types.ts";
-import { interpret, type AiConfig } from "./ai.ts";
+import { interpret, extractStatement, StatementError, type AiConfig, type Statement } from "./ai.ts";
 import { interpretRules, matchUserCategory, matchCard, matchGoal } from "./interpreter_rules.ts";
 import { guessCategory } from "./categorizer.ts";
 import { extractAmount, findAmounts } from "./money.ts";
 import { resolveDate, addDays } from "./dates.ts";
 import { brl, dateBR, norm, pct } from "./text.ts";
 
-export interface AssistantDeps { db: EngineDb; ai?: AiConfig; }
+export interface AssistantDeps {
+  db: EngineDb;
+  ai?: AiConfig;
+  /** leitura de fatura/extrato (substituível nos testes) */
+  extract?: (bytes: Uint8Array, mime: string, uc: UserContext) => Promise<Statement>;
+}
+
+interface ImportDest { cartao?: string; conta?: string; }
 
 export interface QueueItem { texto: string; data?: string; }
 
@@ -29,6 +36,8 @@ type Pending = (
   | { kind: "ask_card"; interp: Interpretation; options: string[] }
   | { kind: "ask_goal"; interp: Interpretation; options: string[] }
   | { kind: "confirm_cancel_recurring"; id: string; label: string }
+  | { kind: "import_dest"; st: Statement; options: string[]; campo: "cartao" | "conta" }
+  | { kind: "confirm_import"; st: Statement; dest: ImportDest }
 ) & { fila?: QueueItem[] };
 
 interface Outcome extends AssistantReply { pending?: Pending | null; }
@@ -64,7 +73,8 @@ export async function handleMessage(msg: IncomingMessage, deps: AssistantDeps): 
 
   let out: Outcome | null = null;
   try {
-    if (!content) out = { reply: "Não consegui entender o áudio. Pode repetir ou digitar?" };
+    if (msg.document) out = await documentFlow(c);
+    if (!out && !content) out = { reply: "Não consegui entender o áudio. Pode repetir ou digitar?" };
     if (!out && state.pending) {
       out = await resolvePending(state.pending, c);
       const fila = state.pending.fila ?? [];
@@ -218,6 +228,7 @@ const HELP = `Sou seu assistente financeiro. Basta conversar comigo:
 🧾 *Vários de uma vez*: “gastei 20 no mercado e 50 de combustível”
 💰 *Receitas*: “recebi 1.000 de salário”, “entrou 3 mil de vendas”
 💳 *Cartão*: “comprei uma TV de 3.000 em 10x no cartão Nubank”, “quanto está a fatura?”, “paguei a fatura do Nubank”
+📄 *Fatura em PDF*: mande o PDF ou a foto da fatura do cartão (ou do extrato) que eu leio e lanço tudo
 🔄 *Contas fixas*: “minha internet custa 120 todo dia 10”, “recebo 7 mil todo quinto dia útil”, “não pago mais a Netflix”
 🎯 *Metas*: “quero juntar 20 mil até dezembro para a viagem”, “guardei 500 na meta viagem”, “como estão minhas metas?”
 💵 *Orçamento*: “orçamento de 1.000 para alimentação”, “como está meu orçamento?”
@@ -471,6 +482,26 @@ async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
       const g = matchGoal(text, c.uc) ?? p.options.find((o) => norm(o).includes(n) || n.includes(norm(o)));
       if (g) return saveFlow({ ...p.interp, meta: g }, c);
       if (!looksLikeNewCommand(text, c.uc)) return { reply: `Não encontrei essa meta. Suas metas: ${p.options.join(" · ")}` };
+      break;
+    }
+    case "import_dest": {
+      const opt = p.options.find((o) => norm(o) === n) ?? p.options.find((o) => n.includes(norm(o)) || norm(o).includes(n)) ??
+        (p.campo === "cartao" ? matchCard(text, c.uc) : undefined);
+      if (opt) return importPreview(p.st, p.campo === "cartao" ? { cartao: opt } : { conta: opt }, c);
+      if (!looksLikeNewCommand(text, c.uc)) return { reply: `Não encontrei. Escolha uma destas opções: ${p.options.join(" · ")}` };
+      break;
+    }
+    case "confirm_import": {
+      if (yes) return importConfirm(p.st, p.dest, c);
+      if (/\b(lista|listar|ver|mostra|mostrar|detalhe|detalhes|quais)\b/.test(n)) {
+        const r = await c.deps.db.rpc<any>("fe_import", c.user, { ...p.dest, vencimento: p.st.vencimento, itens: statementItems(p.st) });
+        const novas = r.itens.filter((x: any) => x.situacao === "nova");
+        const lines = novas.slice(0, 60).map((x: any) => `• ${dateBR(x.data).slice(0, 5)} ${x.descricao} — ${x.tipo === "receita" ? "−" : ""}${brl(x.valor_cents)} (${x.categoria}${x.subcategoria ? " > " + x.subcategoria : ""})`);
+        return {
+          reply: `Lançamentos que vou registrar:\n${lines.join("\n")}${novas.length > 60 ? `\n… e mais ${novas.length - 60}` : ""}\n\nLanço todos? (*sim* / *não*) — depois você pode corrigir categorias no app.`,
+          pending: p,
+        };
+      }
       break;
     }
     case "confirm_cancel_recurring": {
@@ -727,6 +758,115 @@ async function alertsQuery(c: Ctx): Promise<Outcome> {
   const a = await c.deps.db.rpc<any[]>("fe_alerts", c.user, {});
   if (!a.length) return { reply: "Nenhum alerta no momento. 👍 Orçamentos, faturas e metas estão em dia." };
   return { reply: "🔔 Alertas:\n" + a.map((x) => `${x.icone} ${x.texto}`).join("\n") };
+}
+
+// ---------------------------------------------------------------------------
+// Fatura / extrato em PDF ou foto
+// ---------------------------------------------------------------------------
+const PDF_SENHA = "🔒 Esse PDF está protegido por senha, e assim não consigo ler.\n\nPara tirar a senha: abra o PDF (ele vai pedir a senha, normalmente os primeiros dígitos do CPF), toque em *Imprimir* e escolha *Salvar como PDF*. O arquivo novo fica sem senha — é só me mandar ele.\n\nOutra opção: baixe a fatura em *OFX* ou *CSV* no app do banco e importe em *Cartões → Importar fatura*.";
+
+/** Itens no formato do motor, com a categoria sugerida pelas regras (mais precisas) ou pela IA. */
+function statementItems(st: Statement) {
+  return st.itens.map((it) => {
+    const despesa = st.tipo === "fatura_cartao" ? it.valor > 0 : it.valor < 0;
+    const g = guessCategory(it.descricao, despesa ? "despesa" : "receita");
+    const useRule = g && (g.confianca >= 0.8 || !it.categoria);
+    return {
+      data: it.data, valor: it.valor, descricao: it.descricao, parcela: it.parcela,
+      categoria: useRule ? g!.categoria : despesa ? it.categoria : undefined,
+      subcategoria: useRule ? g!.subcategoria : undefined,
+    };
+  });
+}
+
+/** Para a tela de importação do app: lê o documento e devolve os itens já com categoria sugerida (nada é gravado). */
+export async function readStatement(bytes: Uint8Array, mime: string, user: string, deps: AssistantDeps) {
+  const uc = await deps.db.rpc<UserContext>("fe_context", user, {});
+  const extract = deps.extract ?? ((b: Uint8Array, m: string, u: UserContext) => extractStatement(b, m, u, deps.ai ?? {}));
+  const st = await extract(bytes, mime, uc);
+  const hint = [st.cartao, st.banco].filter(Boolean).join(" ");
+  const cards = uc.cartoes ?? [];
+  const cartao = st.tipo === "fatura_cartao" ? ((hint && matchCard(hint, uc)) || (cards.length === 1 ? cards[0] : undefined)) : undefined;
+  const conta = st.tipo === "extrato_conta" && st.banco ? uc.contas.find((a) => norm(a).includes(norm(st.banco!)) || norm(st.banco!).includes(norm(a))) : undefined;
+  return { tipo: st.tipo, banco: st.banco, final_cartao: st.final_cartao, vencimento: st.vencimento, total: st.total, cartao, conta, itens: statementItems(st) };
+}
+
+async function documentFlow(c: Ctx): Promise<Outcome> {
+  const d = c.msg.document!;
+  const extract = c.deps.extract ?? ((b: Uint8Array, m: string, uc: UserContext) => extractStatement(b, m, uc, c.deps.ai ?? {}));
+  let st: Statement;
+  try {
+    st = await extract(d.bytes, d.mime, c.uc);
+  } catch (e) {
+    const code = e instanceof StatementError ? e.code : "";
+    if (code === "senha") return { reply: PDF_SENHA, pending: null };
+    if (code === "grande") return { reply: "Esse arquivo é grande demais (máximo 15 MB). Tente mandar só as páginas dos lançamentos.", pending: null };
+    if (code === "sem_ia") return { reply: "A leitura de PDF ainda não está configurada no servidor.", pending: null };
+    console.error("fatura:", (e as Error).message);
+    return { reply: "Não consegui ler esse documento. 😕 Confira se é a fatura ou o extrato (PDF ou foto nítida) e tente de novo. Se preferir, baixe o arquivo *OFX* ou *CSV* no app do banco e importe em *Cartões → Importar fatura*.", pending: null };
+  }
+  if (st.tipo === "fatura_cartao") {
+    const cards = c.uc.cartoes ?? [];
+    if (!cards.length) {
+      return { reply: `📄 Li uma fatura${st.banco ? ` do ${st.banco}` : ""} com ${st.itens.length} lançamentos, mas você ainda não cadastrou cartões.\nCadastre em *Cartões* no app (nome, dia de fechamento e de vencimento) e me mande a fatura de novo. 💳`, pending: null };
+    }
+    const hint = [st.cartao, st.banco].filter(Boolean).join(" ");
+    const card = (hint && matchCard(hint, c.uc)) || (hint && cards.find((k) => norm(hint).includes(norm(k)) || norm(k).split(" ").some((w) => w.length >= 4 && norm(hint).includes(w)))) ||
+      (cards.length === 1 ? cards[0] : undefined);
+    if (!card) {
+      return { reply: `📄 Li uma fatura${st.banco ? ` do ${st.banco}` : ""}${st.final_cartao ? ` (final ${st.final_cartao})` : ""} com ${st.itens.length} lançamentos. De qual cartão ela é? ${cards.join(" · ")}`,
+        pending: { kind: "import_dest", st, options: cards, campo: "cartao" } };
+    }
+    return importPreview(st, { cartao: card }, c);
+  }
+  const contas = c.uc.contas;
+  const conta = st.banco ? contas.find((a) => norm(a).includes(norm(st.banco!)) || norm(st.banco!).includes(norm(a))) : undefined;
+  if (!conta) {
+    return { reply: `📄 Li um extrato${st.banco ? ` do ${st.banco}` : ""} com ${st.itens.length} lançamentos. De qual conta ele é? ${contas.join(" · ")}`,
+      pending: { kind: "import_dest", st, options: contas, campo: "conta" } };
+  }
+  return importPreview(st, { conta }, c);
+}
+
+async function importPreview(st: Statement, dest: ImportDest, c: Ctx): Promise<Outcome> {
+  const r = await c.deps.db.rpc<any>("fe_import", c.user, { ...dest, vencimento: dest.cartao ? st.vencimento : undefined, itens: statementItems(st) });
+  if (r.status === "unknown_card" || r.status === "unknown_account") return { reply: "Não encontrei essa conta/cartão no seu cadastro.", pending: null };
+  const novas = r.itens.filter((x: any) => x.situacao === "nova");
+  const dups = r.itens.filter((x: any) => x.situacao === "duplicada");
+  const pags = r.itens.filter((x: any) => x.situacao === "pagamento");
+  const onde = dest.cartao ? `a fatura do *${r.cartao}*${st.vencimento ? ` (vencimento ${dateBR(st.vencimento)})` : ""}` : `o extrato da conta *${r.conta}*`;
+  let reply = `📄 Li ${onde}: ${r.itens.length} lançamentos.`;
+  if (dest.cartao && st.total != null) {
+    const soma = r.itens.filter((x: any) => x.situacao === "nova" || x.situacao === "duplicada")
+      .reduce((s: number, x: any) => s + (x.tipo === "despesa" ? x.valor_cents : -x.valor_cents), 0);
+    const total = Math.round(st.total * 100);
+    reply += Math.abs(soma - total) <= 5
+      ? `\n✅ A soma confere com o total da fatura (${brl(total)}).`
+      : `\n⚠️ A soma do que li (${brl(soma)}) é diferente do total da fatura (${brl(total)}). Pode ser saldo anterior, juros ou alguma linha que não consegui ler — confira depois em *Cartões*.`;
+  }
+  if (dups.length) reply += `\n🔁 ${dups.length} já estavam lançados e não entram de novo.`;
+  if (pags.length) reply += `\n💳 ${pags.length} pagamento(s) de fatura ignorado(s).`;
+  if (!novas.length) return { reply: `${reply}\n\nNão há nada novo para lançar. 👍`, pending: null };
+  const porCat = new Map<string, { icone: string; total: number; n: number }>();
+  for (const x of novas.filter((y: any) => y.tipo === "despesa")) {
+    const k = porCat.get(x.categoria) ?? { icone: x.icone ?? "•", total: 0, n: 0 };
+    k.total += x.valor_cents; k.n++; porCat.set(x.categoria, k);
+  }
+  const cats = [...porCat.entries()].sort((a, b) => b[1].total - a[1].total).map(([nome, v]) => `${v.icone} ${nome}: ${brl(v.total)} (${v.n})`);
+  const totDesp = novas.filter((y: any) => y.tipo === "despesa").reduce((s: number, y: any) => s + y.valor_cents, 0);
+  const totRec = novas.filter((y: any) => y.tipo === "receita").reduce((s: number, y: any) => s + y.valor_cents, 0);
+  reply += `\n\n*Novos: ${novas.length}*${totDesp ? ` · gastos ${brl(totDesp)}` : ""}${totRec ? ` · ${dest.cartao ? "estornos" : "entradas"} ${brl(totRec)}` : ""}`;
+  if (cats.length) reply += `\n${cats.join("\n")}`;
+  reply += `\n\nLanço tudo? (*sim* / *não*) — ou diga *lista* para ver um por um.`;
+  return { reply, pending: { kind: "confirm_import", st, dest } };
+}
+
+async function importConfirm(st: Statement, dest: ImportDest, c: Ctx): Promise<Outcome> {
+  const r = await c.deps.db.rpc<any>("fe_import", c.user, { ...dest, vencimento: dest.cartao ? st.vencimento : undefined, itens: statementItems(st), confirmar: true, origem: "importacao" });
+  let reply = `✅ Pronto! Lancei ${r.importados} lançamento(s) ${dest.cartao ? `na fatura do ${r.cartao}` : `na conta ${r.conta}`}.`;
+  if (r.fatura) reply += `\nTotal dessa fatura no app: *${brl(r.fatura.total_cents)}*${r.fatura.restante_cents > 0 ? `, vence ${dateBR(r.fatura.vencimento)}` : ""}.`;
+  reply += `\nSe alguma categoria ficou errada, corrija em *Lançamentos* no app — eu aprendo e acerto nas próximas faturas.`;
+  return { reply, pending: null };
 }
 
 function capToToday(i: Interpretation, c: Ctx) {

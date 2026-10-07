@@ -20,6 +20,7 @@ export interface IncomingMessage {
   timestamp: string;
   audio_provider?: string;
   media_ref?: string;
+  document?: { bytes: Uint8Array; mime: string; name?: string };  // PDF/foto de fatura ou extrato
 }
 
 export type QueryKind =

@@ -18,7 +18,18 @@ const issue = (u: { id: string; email: string }) => {
 };
 const userOf = (req: Request) => tokens.get((req.headers.get("authorization") ?? "").replace(/^Bearer /, ""));
 
-const assistant = createAppHandler({ db, getUserId: async (t) => tokens.get(t)?.id ?? null });
+// FAKE_EXTRACT=1: simula a leitura de PDF (sem IA) para testar a tela de importação
+const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
+const fakeExtract = process.env.FAKE_EXTRACT ? async () => ({
+  tipo: "fatura_cartao" as const, banco: "Nubank", cartao: "Nubank", total: 205.9,
+  itens: [
+    { data: today, descricao: "UBER *TRIP", valor: 25.9 },
+    { data: today, descricao: "POSTO SHELL", valor: 150 },
+    { data: today, descricao: "PADARIA REAL", valor: 30, categoria: "Alimentação" },
+    { data: today, descricao: "PAGAMENTO RECEBIDO", valor: -400 },
+  ],
+}) : undefined;
+const assistant = createAppHandler({ db, getUserId: async (t) => tokens.get(t)?.id ?? null, extract: fakeExtract });
 
 Bun.serve({
   port: PORT,

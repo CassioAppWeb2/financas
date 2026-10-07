@@ -43,6 +43,7 @@ function payOptions(withCards, sel) {
 // CARTÕES
 // =====================================================================
 export async function cardsView(page) {
+  await C.loadBoot();
   const cards = await C.api.rpc("app_cards");
   const total = cards.reduce((s, k) => s + Number(k.fatura_atual.total_cents), 0);
   page.innerHTML = `
@@ -184,6 +185,7 @@ function payDialog(k, fat, after) {
 // CONTAS FIXAS (recorrências)
 // =====================================================================
 export async function recurringView(page) {
+  await C.loadBoot();
   const r = await C.api.rpc("app_recurrings");
   const item = (x) => `<div class="item click" data-id="${x.id}"><div class="emoji">${x.icone || (x.tipo === "receita" ? "💰" : "🔄")}</div>
     <div class="body"><div class="title">${C.esc(x.descricao)}</div>
@@ -290,6 +292,7 @@ function recForm(x, after) {
 // METAS
 // =====================================================================
 export async function goalsView(page) {
+  await C.loadBoot();
   const goals = await C.api.rpc("app_goals", { todas: true });
   const ativas = goals.filter((g) => g.status === "ativa"), outras = goals.filter((g) => g.status !== "ativa");
   const card = (g) => `<div class="card goal" data-id="${g.id}">
@@ -393,6 +396,7 @@ function goalHistory(g, after) {
 // ORÇAMENTOS
 // =====================================================================
 export async function budgetsView(page) {
+  await C.loadBoot();
   const r = await C.api.rpc("app_budgets", { mes: C.state.month, membro_id: C.state.membro });
   const SITC = { ok: "", atencao: "warn", estourado: "bad" };
   const current = r.mes === String(C.state.boot.hoje).slice(0, 7);
@@ -458,6 +462,7 @@ function period() {
 }
 
 export async function reportsView(page) {
+  await C.loadBoot();
   const P = period();
   const r = await C.api.rpc("app_report", { inicio: P.inicio, fim: P.fim, membro_id: C.state.membro });
   const s = r.resumo;
@@ -564,14 +569,15 @@ export async function reportsView(page) {
 // =====================================================================
 // IMPORTAÇÃO DE EXTRATO (OFX / CSV)
 // =====================================================================
-export function importDialog(pref = {}, after) {
+export async function importDialog(pref = {}, after) {
+  await C.loadBoot();
   const b = C.state.boot;
   C.modal(`<h2>Importar extrato</h2>
     <form id="if" novalidate>
-      <div class="field"><label>Arquivo do banco (.ofx ou .csv)</label><input class="input" type="file" name="arq" accept=".ofx,.qfx,.csv,.txt,text/csv"></div>
+      <div class="field"><label>Arquivo do banco (OFX, CSV, PDF ou foto da fatura)</label><input class="input" type="file" name="arq" accept=".ofx,.qfx,.csv,.txt,text/csv,.pdf,application/pdf,image/jpeg,image/png"></div>
       <div class="field"><label>Os lançamentos são de</label><select class="input" name="destino">${payOptions(true, pref.cartao && b.cartoes?.length ? `k:${b.cartoes[0].id}` : undefined)}</select></div>
       <label class="row small" style="margin-bottom:8px"><input type="checkbox" name="inverter"> Inverter sinais (use se as compras aparecerem como entradas)</label>
-      <p class="small muted">Prefira o arquivo <b>OFX</b> (no app ou site do banco: Extrato → Exportar → OFX/Money). Nada é salvo antes de você conferir. Lançamentos que já existem são marcados como duplicados e não entram de novo.</p>
+      <p class="small muted">O mais preciso é o arquivo <b>OFX</b> (no app ou site do banco: Extrato → Exportar). <b>PDF ou foto</b> da fatura também funcionam: a IA lê os lançamentos (pode levar até 1 minuto) e você confere antes. Nada é salvo antes da sua confirmação, e o que já existe não entra de novo.</p>
       <p class="small expense hidden form-err"></p>
       <div class="modal-actions"><button type="button" class="btn" id="ic">Cancelar</button><button class="btn primary">Ver prévia</button></div>
     </form>`, (m, close) => {
@@ -581,6 +587,8 @@ export function importDialog(pref = {}, after) {
       e.preventDefault();
       const file = f.arq.files[0];
       if (!file) return err(m, "Escolha o arquivo.");
+      const isDoc = /\.(pdf|jpe?g|png)$/i.test(file.name) || /^(application\/pdf|image\/)/.test(file.type);
+      if (isDoc) return readDocument(file, f, m, close, after);
       let parsed;
       try {
         const buf = await file.arrayBuffer();
@@ -604,13 +612,44 @@ export function importDialog(pref = {}, after) {
   });
 }
 
-function importPreview(prev, itens, dest, destLabel, after) {
+async function readDocument(file, f, m, close, after) {
+  if (file.size > 15_000_000) return err(m, "Arquivo grande demais (máximo 15 MB).");
+  const btn = $("button.primary", m);
+  btn.disabled = true; btn.textContent = "Lendo a fatura…";
+  try {
+    const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
+    const mime = file.type || (/\.pdf$/i.test(file.name) ? "application/pdf" : "image/jpeg");
+    const st = await C.api.ask({ acao: "ler_extrato", arquivo_base64: b64, mime });
+    const b = C.state.boot;
+    let [kind, id] = f.destino.value.split(":");
+    if (st.cartao) { const k = (b.cartoes || []).find((x) => x.nome === st.cartao); if (k) { kind = "k"; id = k.id; } }
+    else if (st.conta) { const a = b.contas.contas.find((x) => x.nome === st.conta); if (a) { kind = "c"; id = a.id; } }
+    if (st.tipo === "fatura_cartao" && kind !== "k") {
+      if (!(b.cartoes || []).length) return err(m, "Isso é uma fatura de cartão. Cadastre o cartão em Cartões antes de importar.");
+      if (!f.destino.value.startsWith("k:")) return err(m, "Isso parece uma fatura de cartão: escolha o cartão em “Os lançamentos são de” e tente de novo.");
+    }
+    const dest = kind === "k" ? { cartao_id: id, vencimento: st.vencimento || null } : { conta_id: id };
+    const label = kind === "k" ? `💳 ${(b.cartoes || []).find((x) => x.id === id)?.nome}${st.vencimento ? ` · fatura com vencimento em ${C.dateBR(st.vencimento)}` : ""}` : `🏦 ${b.contas.contas.find((x) => x.id === id)?.nome}`;
+    const prev = await C.api.rpc("app_import", { ...dest, itens: st.itens });
+    close();
+    importPreview(prev, st.itens, dest, label, after, st.total);
+  } catch (y) { err(m, y.message); }
+  finally { btn.disabled = false; btn.textContent = "Ver prévia"; }
+}
+
+function importPreview(prev, itens, dest, destLabel, after, totalDoc) {
   const rows = prev.itens;
   const novas = rows.filter((x) => x.situacao === "nova");
   const cats = (tipo) => C.state.boot.categorias.filter((c) => c.tipo === tipo);
   const SITL = { nova: ["Nova", "ok"], duplicada: ["Já existe", ""], pagamento: ["Pagamento da fatura", ""], invalida: ["Linha inválida", "bad"] };
   C.modal(`<h2>Conferir importação</h2>
     <p class="small muted">${C.esc(destLabel)} · ${rows.length} linhas · <b>${novas.length} novas</b> · ${rows.length - novas.length} serão ignoradas</p>
+    ${totalDoc != null ? (() => {
+      const soma = rows.filter((x) => x.situacao === "nova" || x.situacao === "duplicada").reduce((t, x) => t + (x.tipo === "despesa" ? x.valor_cents : -x.valor_cents), 0);
+      const tot = Math.round(totalDoc * 100);
+      return Math.abs(soma - tot) <= 5 ? `<p class="notice" style="background:var(--brand-soft)">✅ A soma confere com o total da fatura (${C.brl(tot)}).</p>`
+        : `<p class="notice">⚠️ A soma lida (${C.brl(soma)}) é diferente do total da fatura (${C.brl(tot)}). Pode ser saldo anterior, juros ou uma linha que a IA não leu — confira.</p>`;
+    })() : ""}
     <div class="imp-wrap"><table class="tbl imp"><thead><tr><th></th><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th></th></tr></thead><tbody>
       ${rows.map((x) => `<tr data-l="${x.linha}" class="${x.situacao !== "nova" ? "off" : ""}">
         <td>${x.situacao === "nova" ? `<input type="checkbox" checked data-ok>` : ""}</td>
