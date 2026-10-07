@@ -83,7 +83,7 @@ language sql stable security definer set search_path = public, pg_temp as $$
     'conta_id', r.account_id, 'conta', (select name from accounts where id = r.account_id),
     'cartao_id', r.card_id, 'cartao', (select name from credit_cards where id = r.card_id),
     'frequencia', r.frequency, 'dia', r.day_of_month, 'dia_util', r.business_day,
-    'inicio', r.start_date, 'fim', r.end_date, 'proxima', r.next_date, 'ativa', r.active,
+    'inicio', r.start_date, 'fim', r.end_date, 'proxima', case when r.active then coalesce((select min(t.date) from transactions t where t.recurring_id = r.id and t.deleted_at is null and t.date >= fe_today(r.user_id)), r.next_date) end, 'ativa', r.active,
     'membro_id', r.member_id,
     'membro', case when r.member_id is null then 'Família' else (select coalesce(name,'Membro') from profiles where id = r.member_id) end,
     'quando', case when r.frequency = 'semanal' then 'toda semana'

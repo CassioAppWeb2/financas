@@ -257,3 +257,60 @@ a { color: var(--brand); }
 .sub-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--surface-2); border-radius: 99px; padding: 4px 6px 4px 10px; font-size: 13px; }
 .sub-chip button { border: 0; background: transparent; cursor: pointer; color: var(--ink-3); padding: 0 4px; font-size: 14px; }
 .code-box { font-size: 34px; font-weight: 800; letter-spacing: .2em; text-align: center; background: var(--surface-2); border-radius: 12px; padding: 14px; margin: 10px 0; }
+
+/* ---------- Fase 2: cartões, metas, orçamentos, relatórios, importação ---------- */
+.spacer { flex: 1; }
+.kv { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 3px 0; }
+.tag.ok { background: var(--brand-soft); color: var(--income); }
+.tag.warn { background: var(--warn-bg); color: #8a5a00; }
+.tag.bad { background: #fde3dc; color: var(--danger); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .tag.warn { color: #f3cf7a; } :root:not([data-theme="light"]) .tag.bad { background: #4a2018; color: #ffb4a3; } }
+:root[data-theme="dark"] .tag.warn { color: #f3cf7a; }
+.pbar { height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; margin: 6px 0 4px; }
+.pbar i { display: block; height: 100%; border-radius: 4px; background: var(--brand); }
+.pbar.warn i { background: #d99a00; }
+.pbar.bad i { background: var(--danger); }
+.pbar.ok i { background: var(--income); }
+.pbar-wrap { position: relative; }
+.pbar-wrap .pace { position: absolute; top: 2px; width: 2px; height: 16px; background: var(--ink-2); border-radius: 1px; transform: translateX(-1px); }
+.budget { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.budget:last-child { border-bottom: 0; }
+.budget.click { cursor: pointer; }
+.budget.click:hover { background: var(--surface-2); margin: 0 -8px; padding: 10px 8px; border-radius: 10px; }
+.cc-face { --cc: #1f4fa3; background: linear-gradient(135deg, var(--cc), color-mix(in srgb, var(--cc) 55%, #000)); color: #fff; border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; min-height: 76px; display: flex; flex-direction: column; justify-content: space-between; }
+.cc-name { font-weight: 800; font-size: 17px; }
+.cc-days { font-size: 12px; opacity: .85; }
+.colors { display: flex; gap: 8px; flex-wrap: wrap; }
+.colors input { position: absolute; opacity: 0; }
+.colors i { display: block; width: 28px; height: 28px; border-radius: 50%; border: 3px solid transparent; cursor: pointer; }
+.colors input:checked + i { border-color: var(--ink); }
+.colors input:focus-visible + i { outline: 2px solid var(--brand); outline-offset: 2px; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.tbl th { text-align: left; font-size: 12px; color: var(--ink-3); font-weight: 700; padding: 6px 6px; border-bottom: 1px solid var(--line); }
+.tbl td { padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.tbl td.num, .tbl th:not(:first-child) { text-align: right; }
+.tbl tr:last-child td { border-bottom: 0; }
+.tbl.imp th:not(:first-child) { text-align: left; }
+.tbl.imp tr.off { opacity: .45; }
+.tbl.imp select.input { padding: 4px 6px; font-size: 13px; min-width: 130px; }
+.imp-wrap { max-height: 52dvh; overflow: auto; margin: 10px 0; border: 1px solid var(--line); border-radius: 10px; }
+.modal.wide { max-width: 860px; }
+.alerts .alert { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 10px; margin-top: 6px; background: var(--surface-2); font-size: 14px; }
+.alerts .alert.warn { background: var(--warn-bg); }
+.alerts .alert.bad { background: #fde3dc; }
+.alerts .alert.ok { background: var(--brand-soft); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .alerts .alert.bad { background: #4a2018; } }
+.print-only { display: none; }
+
+@media print {
+  body { background: #fff; color: #000; }
+  .sidebar, .bottom-nav, .fab, .no-print, .toast, .btn, .seg, .month-nav button { display: none !important; }
+  .app { display: block; }
+  .main { padding: 0; max-width: none; }
+  .print-only { display: block; margin-bottom: 12px; }
+  .print-only h1 { font-size: 20px; margin: 0 0 4px; }
+  .card { box-shadow: none; break-inside: avoid; border-color: #ccc; }
+  .grid.two { grid-template-columns: 1fr 1fr; }
+  details { display: block; } details > * { display: block; }
+  a { color: inherit; text-decoration: none; }
+}

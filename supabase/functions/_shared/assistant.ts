@@ -376,7 +376,7 @@ async function recurringFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
   const x = r.recorrencia;
   const onde = x.cartao ? ` no cartão ${x.cartao}` : x.conta ? ` (${x.conta})` : "";
   let reply = `🔄 Conta fixa criada: **${x.descricao}** — ${brl(x.valor_cents)} ${x.quando}${onde}, em ${x.categoria}${x.subcategoria ? ` > ${x.subcategoria}` : ""}.`;
-  reply += `\nVou lançar sozinho todo período${x.proxima ? `; o próximo é em ${dateBR(r.primeira)}` : ""}. Para parar, é só dizer “não pago mais ${x.descricao.toLowerCase()}”.`;
+  reply += `\nVou lançar sozinho ${x.frequencia === "semanal" ? "toda semana" : x.frequencia === "anual" ? "todo ano" : "todo mês"}${x.proxima ? `; o próximo é em ${dateBR(r.primeira)}` : ""}. Para parar, é só dizer “não pago mais ${x.descricao.toLowerCase()}”.`;
   if (r.data_mes_atual) {
     reply += `\n\nA deste mês (${dateBR(r.data_mes_atual)}) já passou. Quer que eu registre também? (*sim* / *não*)`;
     return { reply, pending: { kind: "confirm_create", interp: { ...i, intent: tipo === "receita" ? "CREATE_INCOME" : "CREATE_EXPENSE", recorrente: false, data: r.data_mes_atual, data_explicita: true } } };
@@ -679,7 +679,8 @@ async function budgetSetFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
   if (r.status === "unknown_category") return { reply: `Não encontrei a categoria “${r.categoria}”.\n${categoryList(c, "despesa")}`, pending: { kind: "ask_category", interp: { ...i, intent: "CREATE_BUDGET", tipo: "despesa" } } };
   const st = r.situacao;
   let reply = r.valor_cents === 0 ? `Pronto, tirei o orçamento de ${r.categoria}.` : `💵 Orçamento de **${r.categoria}**: ${brl(r.valor_cents)} por mês, a partir deste mês.`;
-  if (st) reply += `\nEste mês: ${brl(st.gasto_cents)} gastos (${Math.round(st.percentual)}%). Aviso quando chegar a 80%.`;
+  if (st && r.valor_cents) reply += `\nEste mês: ${brl(st.gasto_cents)} gastos (${Math.round(st.percentual)}%).` +
+    (st.percentual >= 100 ? " 🚨 Já passou do limite." : st.percentual >= 80 ? " ⚠️ Já está perto do limite." : " Aviso quando chegar a 80%.");
   return { reply, pending: null };
 }
 
