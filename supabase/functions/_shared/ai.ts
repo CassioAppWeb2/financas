@@ -19,38 +19,38 @@ export interface AiConfig {
 
 const GEMINI_URL = (model: string) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
-// Modelos tentados em ordem: o Google aposenta modelos com frequência,
-// então se um responder 404 (inexistente) ou 429/403 (sem cota grátis), tenta o próximo.
-const GEMINI_FALLBACK = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-flash-latest", "gemini-3.5-flash-lite"];
-let geminiWorking: string | undefined;
+// O Google aposenta e sobrecarrega modelos com frequência. Para não ficar esperando um
+// modelo lento, a pergunta vai para vários modelos AO MESMO TEMPO e vale a primeira resposta boa.
+const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-flash-latest"];
 
 export async function geminiCall(cfg: AiConfig, body: unknown, timeoutMs: number): Promise<{ data: any; model: string }> {
   const f = cfg.fetch ?? fetch;
-  const list = [...new Set([geminiWorking, cfg.geminiModel, ...GEMINI_FALLBACK].filter(Boolean) as string[])];
-  let last = "";
-  for (const model of list) {
-    let res: Response;
-    const t0 = Date.now();
-    try {
-      res = await f(GEMINI_URL(model), {
+  const list = [...new Set([cfg.geminiModel, ...GEMINI_MODELS].filter(Boolean) as string[])];
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const payload = JSON.stringify(body);
+  const errors: string[] = [];
+  try {
+    return await Promise.any(list.map(async (model) => {
+      const res = await f(GEMINI_URL(model), {
         method: "POST",
         headers: { "content-type": "application/json", "x-goog-api-key": cfg.geminiKey! },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs),
+        body: payload,
+        signal: ctrl.signal,
       });
-    } catch (e) {
-      last = `Gemini sem resposta em ${Math.round((Date.now() - t0) / 1000)}s (${model}): ${(e as Error).message}`;
-      console.warn(last);
-      if (geminiWorking === model) geminiWorking = undefined;
-      continue;
-    }
-    if (res.ok) { geminiWorking = model; return { data: await res.json(), model }; }
-    last = `Gemini ${res.status} (${model})`;
-    console.warn(last, (await res.text()).slice(0, 300));
-    if (![403, 404, 429, 500, 503].includes(res.status)) break;
-    if (geminiWorking === model) geminiWorking = undefined;
+      if (!res.ok) { errors.push(`${model}: ${res.status}`); throw new Error(String(res.status)); }
+      const data = await res.json();
+      if (!data?.candidates?.[0]?.content?.parts?.[0]?.text) { errors.push(`${model}: vazio`); throw new Error("vazio"); }
+      return { data, model };
+    }));
+  } catch {
+    const msg = `Gemini indisponível (${errors.join(", ") || "sem resposta a tempo"})`;
+    console.warn(msg);
+    throw new Error(msg);
+  } finally {
+    clearTimeout(timer);
+    ctrl.abort();
   }
-  throw new Error(last || "Gemini indisponível");
 }
 
 function buildPrompt(ctx: UserContext): string {
@@ -120,7 +120,7 @@ export async function interpretWithGemini(text: string, ctx: UserContext, cfg: A
     systemInstruction: { parts: [{ text: buildPrompt(ctx) }] },
     contents: [{ role: "user", parts: [{ text }] }],
     generationConfig: { responseMimeType: "application/json", temperature: 0 },
-  }, 12000);
+  }, 15000);
   const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!raw) return null;
   const parsed = sanitize(JSON.parse(raw), text, ctx);
@@ -198,6 +198,6 @@ export async function transcribeAudio(bytes: Uint8Array, mime: string, cfg: AiCo
       { inlineData: { mimeType: mime.split(";")[0], data: toBase64(bytes) } },
     ] }],
     generationConfig: { temperature: 0 },
-  }, 20000);
+  }, 40000);
   return { text: String(d?.candidates?.[0]?.content?.parts?.[0]?.text ?? "").trim(), provider: `gemini:${model}` };
 }
