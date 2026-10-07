@@ -27,6 +27,74 @@ export function matchUserCategory(text: string, ctx: UserContext, tipo?: "despes
   return best ? { categoria: best.categoria, subcategoria: best.subcategoria } : null;
 }
 
+/** Cartão citado pelo nome ("no nubank", "cartão itaú visa") */
+export function matchCard(text: string, ctx: UserContext): string | undefined {
+  const n = norm(text);
+  const hits = (ctx.cartoes ?? []).filter((c) => {
+    const cn = norm(c);
+    return wb(cn).test(n) || cn.split(" ").some((w) => w.length >= 4 && !/^(cartao|credito|visa|master|mastercard|elo|black|gold|platinum)$/.test(w) && wb(w).test(n));
+  });
+  return hits.sort((a, b) => b.length - a.length)[0];
+}
+
+/** Meta citada pelo nome */
+export function matchGoal(text: string, ctx: UserContext): string | undefined {
+  const n = norm(text);
+  return (ctx.metas ?? []).filter((m) => {
+    const mn = norm(m);
+    return wb(mn).test(n) || mn.split(" ").some((w) => w.length >= 4 && wb(w).test(n));
+  }).sort((a, b) => b.length - a.length)[0];
+}
+
+const MONTHS_N: Record<string, number> = { janeiro: 1, fevereiro: 2, marco: 3, abril: 4, maio: 5, junho: 6, julho: 7, agosto: 8, setembro: 9, outubro: 10, novembro: 11, dezembro: 12 };
+const ORD_N: Record<string, number> = { primeiro: 1, segundo: 2, terceiro: 3, quarto: 4, quinto: 5, sexto: 6, setimo: 7, oitavo: 8, nono: 9, decimo: 10 };
+
+/** Prazo de meta: "até dezembro", "até março de 2027", "em 10 meses", "até o fim do ano", "até 15/03/2027" */
+export function parseDeadline(n: string, today: string): string | undefined {
+  const y = Number(today.slice(0, 4)), mo = Number(today.slice(5, 7));
+  const last = (yy: number, mm: number) => new Date(Date.UTC(yy, mm, 0)).toISOString().slice(0, 10);
+  let m = n.match(/\bate (?:o )?(?:fim|final) do ano(?: que vem)?\b/);
+  if (m) return `${/que vem/.test(m[0]) ? y + 1 : y}-12-31`;
+  m = n.match(/\b(?:ate|em|para) (janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?: de (\d{4}))?\b/);
+  if (m) { const mm = MONTHS_N[m[1]]; const yy = m[2] ? Number(m[2]) : (mm < mo ? y + 1 : y); return last(yy, mm); }
+  m = n.match(/\b(?:em|daqui a|nos proximos|ate) (\d{1,3}) (meses|mes|anos|ano)\b/);
+  if (m) { const k = Number(m[1]) * (/ano/.test(m[2]) ? 12 : 1); const d = new Date(Date.UTC(y, mo - 1 + k, Number(today.slice(8, 10)))); return d.toISOString().slice(0, 10); }
+  m = n.match(/\bate (\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/);
+  if (m) return `${m[3].length === 2 ? "20" + m[3] : m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  m = n.match(/\b(?:ate|em) (\d{4})\b/);
+  if (m && Number(m[1]) >= y) return `${m[1]}-12-31`;
+  return undefined;
+}
+
+/** Nome de meta: "para a viagem", "meta da reforma", "juntar 5 mil pra comprar um carro" */
+export function goalName(text: string): string | undefined {
+  const lower = text.toLowerCase();
+  const stop = "(?=\\s+(?:ate|até|em|de\\s+\\d|daqui|nos|no|na|r\\$|\\d)\\b|\\s*[.,!?]|\\s*$)";
+  const pats = [
+    new RegExp(`\\bmeta(?:\\s+(?:de|da|do|para|pra))?\\s+(?!de\\s+\\d)(?!economia)([a-zà-ú][a-zà-ú ]{1,40}?)${stop}`),
+    new RegExp(`\\b(?:para|pra)\\s+(?:a\\s+|o\\s+|uma\\s+|um\\s+|minha\\s+|meu\\s+)?(?:comprar\\s+(?:a\\s+|o\\s+|uma\\s+|um\\s+)?|fazer\\s+(?:a\\s+|uma\\s+)?|trocar\\s+(?:de\\s+|o\\s+|a\\s+)?)?([a-zà-ú][a-zà-ú ]{1,40}?)${stop}`),
+  ];
+  for (const re of pats) {
+    const m = re.exec(lower);
+    if (!m) continue;
+    const name = m[1].trim();
+    if (/^(o|a|os|as|mim|nos|guardar|juntar|janeiro|fevereiro|marco|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro|fim|final)$/.test(norm(name))) continue;
+    return capitalize(name);
+  }
+  return undefined;
+}
+
+/** Recorrência: "todo dia 10", "quinto dia útil", "toda semana", "todo ano" */
+export function parseRecurrence(n: string): { frequencia: "mensal" | "semanal" | "anual"; dia?: number; dia_util?: number } {
+  if (/\b(toda semana|semanal|semanalmente|por semana|toda (segunda|terca|quarta|quinta|sexta|sabado|domingo))\b/.test(n)) return { frequencia: "semanal" };
+  if (/\b(todo ano|anual|anualmente|por ano)\b/.test(n)) return { frequencia: "anual" };
+  let m = n.match(/\b(primeiro|segundo|terceiro|quarto|quinto|sexto|setimo|oitavo|nono|decimo|\d{1,2})[oº]? dia util\b/);
+  if (m) return { frequencia: "mensal", dia_util: ORD_N[m[1]] ?? Number(m[1]) };
+  m = n.match(/\b(?:todo )?dia (\d{1,2})\b/);
+  if (m) return { frequencia: "mensal", dia: Number(m[1]) };
+  return { frequencia: "mensal" };
+}
+
 function matchAccount(text: string, ctx: UserContext): string | undefined {
   const n = norm(text);
   return ctx.contas
@@ -57,7 +125,7 @@ export function extractEstablishment(text: string, ctx?: UserContext): string | 
     if (!kept.length) continue;
     const start = m.index + m[0].indexOf(m[1]);
     const phrase = text.slice(start, start + kept.join(" ").length);
-    if (ctx && ctx.contas.some((c) => norm(c) === norm(phrase))) continue; // é uma conta, não um estabelecimento
+    if (ctx && [...ctx.contas, ...(ctx.cartoes ?? [])].some((c) => norm(c) === norm(phrase) || norm(c).split(" ").includes(norm(phrase)))) continue; // é uma conta, não um estabelecimento
     return phrase === phrase.toLowerCase() ? capitalize(phrase) : phrase;
   }
   return undefined;
@@ -147,7 +215,7 @@ function detectQuery(n: string, text: string, ctx: UserContext): Partial<Interpr
     return q("FINANCIAL_ANALYSIS", "posso_comprar", { valor: amount.valor });
   if (/\bquanto (ainda )?(eu )?posso gastar\b|\bposso gastar quanto\b|\blimite (de gastos?|diario)\b|\bquanto (ainda )?posso\b/.test(n))
     return q("FINANCIAL_ANALYSIS", "disponivel");
-  if (/\bdisponivel\b|\bsobra(ndo)?\b|\bsobrou\b/.test(n)) return q("FINANCIAL_ANALYSIS", "disponivel");
+  if (/\bdisponivel\b|\bsobra(ndo)?\b|\bsobrou\b/.test(n) && !/\blimite\b/.test(n)) return q("FINANCIAL_ANALYSIS", "disponivel");
   if (/\bsaldo\b|\bquanto (eu )?tenho\b|\btenho quanto\b|\bquanto (de )?dinheiro\b/.test(n))
     return q("QUERY_BALANCE", "saldo", { conta: matchAccount(text, ctx) });
   if (/\bparcela/.test(n)) {
@@ -155,9 +223,15 @@ function detectQuery(n: string, text: string, ctx: UserContext): Partial<Interpr
       ? resolvePeriod("próximo mês", today) : periodo;
     return q("QUERY_EXPENSES", "parcelas", { periodo: /\b(proximo mes|mes que vem|este mes|esse mes|neste mes|mes passado)\b/.test(n) ? periodo : p });
   }
-  if (/\b(fatura|cartao|cartoes)\b/.test(n)) return q("QUERY_CARD");
+  if (/\b(alertas?|avisos?)\b/.test(n)) return q("QUERY_ALERTS");
+  if (/\b(contas fixas|gastos fixos|despesas fixas|recorrencias|recorrentes|assinaturas|debitos automaticos)\b/.test(n)) return q("QUERY_RECURRING");
+  const cartao = matchCard(text, ctx);
+  if (/\b(fatura|cartao|cartoes|limite do|limite disponivel)\b/.test(n) || (cartao && /\b(fatura|limite|devo)\b/.test(n))) {
+    const consulta: QueryKind = /\blimite\b/.test(n) ? "limite" : /\b(meus cartoes|quais cartoes|cartoes)\b/.test(n) && !/fatura/.test(n) ? "cartoes" : "fatura";
+    return q("QUERY_CARD", consulta, { cartao, periodo: /\b(proxima|que vem|proximo mes)\b/.test(n) ? resolvePeriod("próximo mês", today) : undefined });
+  }
   if (/\borcamento/.test(n)) return q("QUERY_BUDGET");
-  if (/\bmetas?\b/.test(n)) return q("QUERY_GOAL");
+  if (/\bmetas?\b/.test(n) || (matchGoal(text, ctx) && /\b(falta|quanto|como esta|progresso)\b/.test(n))) return q("QUERY_GOAL", undefined, { meta: matchGoal(text, ctx) });
   if (/\bcompar(e|a|ar|ando|ado|acao|ativo)\b|\bem relacao ao\b|\bversus\b|\bvs\b/.test(n)) return q("QUERY_REPORT", "comparar");
   if (/\b(gastando|gastei|gasto) (demais|muito|d+emais)\b|\bexagerando\b|\bto bem\b|\bestou bem\b/.test(n))
     return q("FINANCIAL_ANALYSIS", "gastando_demais");
@@ -232,6 +306,36 @@ export function interpretRules(input: string, ctx: UserContext): Interpretation 
   }
 
   // Consultas
+  // Cancelar recorrência: "não pago mais a Netflix", "cancela a assinatura do Spotify"
+  if (/\b(parei de pagar|nao pago mais|nao vou mais pagar|cancel\w* (a |o )?(assinatura|recorrencia|conta fixa|debito automatico)|encerr\w* (a |o )?(assinatura|recorrencia|conta fixa)|cancelei (a |o )?)\b/.test(n) && !amount.valor) {
+    const desc = text.replace(/^.*?\b(?:parei de pagar|n[aã]o pago mais|n[aã]o vou mais pagar|cancel\w*|encerr\w*)\s+(?:(?:a|o)\s+)?(?:(?:assinatura|recorr[eê]ncia|conta fixa|d[eé]bito autom[aá]tico)\s*(?:d[aeo]s?\s+)?)?/i, "").replace(/[.!?]+$/, "").trim();
+    return { ...out, intent: "CANCEL_RECURRING", descricao: desc || undefined, confidence: 0.88 };
+  }
+  // Pagar fatura: "paguei a fatura do Nubank", "paguei o cartão"
+  if (/\b(paguei|pago|quitei|pagar|vou pagar|paga)\b/.test(n) && (/\bfatura\b/.test(n) || /\b(paguei|quitei|pagar) (o |meu )?cartao\b/.test(n)) && !RX.question.test(n)) {
+    const contaPg = /\b(da|pela|na|com a) conta\b|\bcom (o )?saldo\b|\bdebit\w*\b|\bpelo pix\b/.test(n) ? matchAccount(text.replace(/\bfatura d[oa]s? \S+/i, ""), ctx) : undefined;
+    return { ...out, intent: "PAY_INVOICE", cartao: matchCard(text, ctx), valor: amount.valor, conta: contaPg,
+      data: resolveDate(text, today).data, confidence: 0.9 };
+  }
+  // Aporte em meta: "guardei 500 na meta viagem", "tirei 200 da reserva"
+  const metaNome = matchGoal(text, ctx);
+  if (amount.valor && /\b(guardei|coloquei|depositei|separei|juntei|aportei|adicionei|poupei|economizei|tirei|retirei|saquei|usei|resgatei)\b/.test(n)
+      && (/\bmeta\b/.test(n) || metaNome)) {
+    const saida = /\b(tirei|retirei|saquei|usei|resgatei)\b/.test(n);
+    return { ...out, intent: "GOAL_CONTRIBUTE", meta: metaNome ?? goalName(text), valor: saida ? -amount.valor : amount.valor,
+      data: resolveDate(text, today).data, confidence: 0.9 };
+  }
+  // Nova meta: "quero juntar 20 mil até dezembro para a viagem"
+  if (/\b(quero juntar|quero guardar|quero economizar|quero poupar|preciso juntar|criar (uma )?meta|nova meta|minha meta e|meta de \d)\b/.test(n) && !RX.question.test(n)) {
+    return { ...out, intent: "CREATE_GOAL", valor: amount.valor, meta: goalName(text), prazo: parseDeadline(n, today), confidence: 0.88 };
+  }
+  // Orçamento: "orçamento de 1000 para alimentação", "quero gastar no máximo 600 com transporte"
+  if (amount.valor && !RX.question.test(n) && /\b(orcamento|limite de gastos?|limite (de|para) (gastar|gasto)|gastar no maximo|gastar ate)\b/.test(n) && !/\bcartao\b/.test(n)) {
+    const uc = matchUserCategory(text, ctx, "despesa");
+    const g = uc ? null : guessCategory(text, "despesa");
+    return { ...out, intent: "CREATE_BUDGET", valor: amount.valor, categoria: uc?.categoria ?? g?.categoria, confidence: 0.88 };
+  }
+
   const query = detectQuery(n, text, ctx);
   const hasCreateVerb = RX.expense.test(n) || RX.income.test(n);
   if (query && !(hasCreateVerb && amount.valor && !RX.question.test(n) && !/\bquanto\b/.test(n))) {
@@ -239,8 +343,6 @@ export function interpretRules(input: string, ctx: UserContext): Interpretation 
   }
 
   // Metas e orçamentos (Fase 2)
-  if (/\b(quero juntar|quero guardar|minha meta|criar meta|nova meta)\b/.test(n)) return { ...out, intent: "CREATE_GOAL", valor: amount.valor, confidence: 0.85 };
-  if (/\b(orcamento de|limite de .* para|definir orcamento)\b/.test(n) && amount.valor) return { ...out, intent: "CREATE_BUDGET", valor: amount.valor, confidence: 0.8 };
 
   // Lançamentos
   let intent: Intent | null = null;
@@ -280,6 +382,14 @@ export function interpretRules(input: string, ctx: UserContext): Interpretation 
   if (recurring && (tipo === "despesa" || tipo === "receita")) intent = "CREATE_RECURRING";
 
   const date = resolveDate(text, today, !recurring);
+  // compra no cartão: nome do cartão citado; se o mesmo nome também é conta, só vale como cartão com "cartão/crédito"
+  let cartao: string | undefined;
+  if (tipo === "despesa") {
+    const cc = matchCard(text, ctx);
+    const mencionaCartao = /\b(cartao|credito)\b/.test(n);
+    if (cc && (mencionaCartao || !matchAccount(text, ctx))) cartao = cc;
+  }
+  const rec = recurring ? parseRecurrence(n) : undefined;
   const res: Interpretation = {
     ...out,
     intent,
@@ -292,7 +402,9 @@ export function interpretRules(input: string, ctx: UserContext): Interpretation 
     recorrente: recurring,
     forma_pagamento: paymentMethod(n),
     familia: (ctx.membros?.length ?? 0) > 1 && FAMILY_WORDS.test(n) ? true : undefined,
-    conta: conta ?? (tipo !== "transferencia" ? matchAccount(text, ctx) : undefined),
+    conta: conta ?? (tipo !== "transferencia" && !cartao ? matchAccount(text, ctx) : undefined),
+    cartao,
+    frequencia: rec?.frequencia, dia: rec?.dia, dia_util: rec?.dia_util,
     conta_destino: contaDestino,
     confidence: verbless ? 0.7 : amount.valor ? 0.92 : 0.8,
   };
@@ -308,6 +420,15 @@ export function interpretRules(input: string, ctx: UserContext): Interpretation 
       res.categoria = uc.categoria; res.subcategoria = uc.subcategoria; res.categoria_confianca = 0.95;
     }
     if (res.descricao && res.conta && norm(res.descricao) === norm(res.conta)) res.descricao = undefined;
+    if (res.descricao && res.cartao && norm(res.cartao).includes(norm(res.descricao))) res.descricao = undefined;
+    // sem verbo ("netflix 55,90 todo dia 15", "mercado 20"): as palavras antes do valor viram a descrição
+    if (!res.descricao) {
+      const lead = text.match(/^\s*([A-Za-zÀ-ú][A-Za-zÀ-ú ]{1,30}?)\s+(?:r\$\s*)?\d/i);
+      if (lead && !RX.expense.test(norm(lead[1])) && !RX.income.test(norm(lead[1])) && !/^(minha|meu|o|a)$/i.test(lead[1].trim())) {
+        const w = lead[1].trim().replace(/^(minha|meu|a|o)\s+/i, "").replace(/\s+(custa|custou|de|por|e)$/i, "");
+        if (w) res.descricao = capitalize(w);
+      }
+    }
   }
   return res;
 }

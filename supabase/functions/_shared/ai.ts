@@ -64,8 +64,9 @@ Responda SOMENTE com um objeto JSON com estes campos (omita os que não se aplic
  "descricao": texto curto, "estabelecimento": nome do local se citado,
  "categoria": EXATAMENTE um nome da lista abaixo, "subcategoria": idem,
  "conta": nome de conta da lista, "conta_destino": idem, "parcelas": inteiro,
- "recorrente": booleano,
- "consulta": "total"|"maior"|"parcelas"|"saldo"|"disponivel"|"resumo"|"comparar"|"gastando_demais"|"posso_comprar",
+ "recorrente": booleano, "frequencia": "mensal"|"semanal"|"anual", "dia": dia do mês da recorrência, "dia_util": n-ésimo dia útil,
+ "cartao": nome de cartão da lista (compras no crédito, faturas), "meta": nome de meta da lista (ou nome novo em CREATE_GOAL), "prazo": "AAAA-MM-DD" (metas),
+ "consulta": "total"|"maior"|"parcelas"|"saldo"|"disponivel"|"resumo"|"comparar"|"gastando_demais"|"posso_comprar"|"fatura"|"limite"|"cartoes",
  "periodo": {"inicio":"AAAA-MM-DD","fim":"AAAA-MM-DD","label":"texto curto"},
  "campo_correcao": "categoria"|"valor"|"data"|"descricao"|"conta",
  "confidence": 0 a 1}
@@ -73,7 +74,10 @@ Regras: NUNCA invente valores, datas ou categorias que não estejam na mensagem 
 Se a categoria não for clara, omita "categoria". Perguntas sobre gastos/saldo/finanças são consultas (QUERY_* ou FINANCIAL_ANALYSIS).
 Categorias do usuário:
 ${cats}
-Contas: ${ctx.contas.join(", ")}`;
+Contas: ${ctx.contas.join(", ")}
+Cartões de crédito: ${(ctx.cartoes ?? []).join(", ") || "nenhum"}
+Metas: ${(ctx.metas ?? []).join(", ") || "nenhuma"}
+PAY_INVOICE = pagou a fatura do cartão; GOAL_CONTRIBUTE = guardou/tirou dinheiro de uma meta; CANCEL_RECURRING = parou de pagar uma conta fixa (descricao = nome dela); QUERY_RECURRING = listar contas fixas; QUERY_ALERTS = avisos/alertas.`;
 }
 
 /** Garante que o JSON da IA só contém valores válidos e que existem no cadastro do usuário. */
@@ -103,7 +107,18 @@ export function sanitize(raw: any, text: string, ctx: UserContext): Interpretati
   const p = Number(raw.parcelas);
   if (Number.isInteger(p) && p >= 2 && p <= 72) out.parcelas = p;
   if (raw.recorrente === true) out.recorrente = true;
-  const consultas = ["total", "maior", "parcelas", "saldo", "disponivel", "resumo", "comparar", "gastando_demais", "posso_comprar"];
+  if (["mensal", "semanal", "anual"].includes(raw.frequencia)) out.frequencia = raw.frequencia;
+  const dia = Number(raw.dia), du = Number(raw.dia_util);
+  if (Number.isInteger(dia) && dia >= 1 && dia <= 31) out.dia = dia;
+  if (Number.isInteger(du) && du >= 1 && du <= 22) out.dia_util = du;
+  const card = (ctx.cartoes ?? []).find((c) => norm(c) === norm(String(raw.cartao ?? "")));
+  if (card) out.cartao = card;
+  if (typeof raw.meta === "string" && raw.meta.trim()) {
+    out.meta = (ctx.metas ?? []).find((m) => norm(m) === norm(raw.meta)) ?? (out.intent === "CREATE_GOAL" ? raw.meta.trim().slice(0, 60) : undefined);
+  }
+  if (isDate(raw.prazo)) out.prazo = raw.prazo;
+  if (out.intent === "GOAL_CONTRIBUTE" && Number.isFinite(v) && v < 0 && out.valor === undefined && findAmounts(text).some((c) => c.role === "valor")) out.valor = Math.round(v * 100) / 100;
+  const consultas = ["total", "maior", "parcelas", "saldo", "disponivel", "resumo", "comparar", "gastando_demais", "posso_comprar", "fatura", "limite", "cartoes"];
   if (consultas.includes(raw.consulta)) out.consulta = raw.consulta;
   if (raw.periodo && isDate(raw.periodo.inicio) && isDate(raw.periodo.fim) && raw.periodo.inicio <= raw.periodo.fim) {
     out.periodo = { inicio: raw.periodo.inicio, fim: raw.periodo.fim, label: String(raw.periodo.label ?? "no período").slice(0, 40) };

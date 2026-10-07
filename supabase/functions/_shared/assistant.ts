@@ -6,7 +6,7 @@
 
 import type { AssistantReply, Card, EngineDb, IncomingMessage, Interpretation, UserContext } from "./types.ts";
 import { interpret, type AiConfig } from "./ai.ts";
-import { interpretRules, matchUserCategory } from "./interpreter_rules.ts";
+import { interpretRules, matchUserCategory, matchCard, matchGoal } from "./interpreter_rules.ts";
 import { guessCategory } from "./categorizer.ts";
 import { extractAmount, findAmounts } from "./money.ts";
 import { resolveDate, addDays } from "./dates.ts";
@@ -26,6 +26,9 @@ type Pending = (
   | { kind: "confirm_create"; interp: Interpretation }
   | { kind: "confirm_delete"; id: string; label: string }
   | { kind: "ask_correction"; id: string; label: string; tipo: string }
+  | { kind: "ask_card"; interp: Interpretation; options: string[] }
+  | { kind: "ask_goal"; interp: Interpretation; options: string[] }
+  | { kind: "confirm_cancel_recurring"; id: string; label: string }
 ) & { fila?: QueueItem[] };
 
 interface Outcome extends AssistantReply { pending?: Pending | null; }
@@ -172,7 +175,7 @@ async function dispatch(i: Interpretation, c: Ctx): Promise<Outcome> {
   switch (i.intent) {
     case "CREATE_EXPENSE": case "CREATE_INCOME": case "CREATE_TRANSFER": case "CREATE_INVESTMENT": case "CREATE_REDEMPTION":
       out = await createFlow(i, c); break;
-    case "CREATE_RECURRING": out = recurringFlow(i); break;
+    case "CREATE_RECURRING": out = await recurringFlow(i, c); break;
     case "QUERY_EXPENSES": case "QUERY_INCOME": case "QUERY_CATEGORY":
       out = i.consulta === "maior" ? await largest(i, c) : i.consulta === "parcelas" ? await installments(i, c) : await totals(i, c); break;
     case "QUERY_BALANCE": case "QUERY_ACCOUNT": out = await balances(i, c); break;
@@ -185,9 +188,16 @@ async function dispatch(i: Interpretation, c: Ctx): Promise<Outcome> {
       break;
     case "DELETE_TRANSACTION": out = await deleteFlow(i, c); break;
     case "EDIT_TRANSACTION": case "CORRECT_CATEGORY": out = await correctFlow(i, c); break;
-    case "QUERY_CARD": out = soon("Cartões de crédito e faturas"); break;
-    case "QUERY_BUDGET": case "CREATE_BUDGET": out = soon("Orçamentos por categoria"); break;
-    case "QUERY_GOAL": case "CREATE_GOAL": out = soon("Metas financeiras"); break;
+    case "QUERY_CARD": out = await cardsQuery(i, c); break;
+    case "PAY_INVOICE": out = await payInvoiceFlow(i, c); break;
+    case "CREATE_BUDGET": out = await budgetSetFlow(i, c); break;
+    case "QUERY_BUDGET": out = await budgetsQuery(c); break;
+    case "CREATE_GOAL": out = await goalCreateFlow(i, c); break;
+    case "GOAL_CONTRIBUTE": out = await goalContributeFlow(i, c); break;
+    case "QUERY_GOAL": out = await goalsQuery(i, c); break;
+    case "QUERY_RECURRING": out = await recurringsQuery(c); break;
+    case "CANCEL_RECURRING": out = await cancelRecurringFlow(i, c); break;
+    case "QUERY_ALERTS": out = await alertsQuery(c); break;
     case "GREETING":
       out = /obrigad|valeu|vlw|brigad/.test(norm(c.msg.content))
         ? { reply: "De nada! 😊 Estou por aqui quando precisar." }
@@ -207,6 +217,10 @@ const HELP = `Sou seu assistente financeiro. Basta conversar comigo:
 💸 *Registrar*: “gastei 87,50 no mercado”, “paguei 200 de gasolina ontem”, “comprei uma TV de 2.400 em 10 vezes”
 🧾 *Vários de uma vez*: “gastei 20 no mercado e 50 de combustível”
 💰 *Receitas*: “recebi 1.000 de salário”, “entrou 3 mil de vendas”
+💳 *Cartão*: “comprei uma TV de 3.000 em 10x no cartão Nubank”, “quanto está a fatura?”, “paguei a fatura do Nubank”
+🔄 *Contas fixas*: “minha internet custa 120 todo dia 10”, “recebo 7 mil todo quinto dia útil”, “não pago mais a Netflix”
+🎯 *Metas*: “quero juntar 20 mil até dezembro para a viagem”, “guardei 500 na meta viagem”, “como estão minhas metas?”
+💵 *Orçamento*: “orçamento de 1.000 para alimentação”, “como está meu orçamento?”
 🔁 *Transferir*: “transferi 500 do Nubank para a Poupança”
 📊 *Consultar*: “quanto gastei este mês?”, “quanto gastei com alimentação?”, “qual minha maior despesa?”, “quanto tenho na conta?”
 🧠 *Analisar*: “quanto posso gastar até o fim do mês?”, “como estão minhas finanças?”, “compare com o mês passado”, “posso comprar um celular de 1.800?”
@@ -226,7 +240,7 @@ function enginePayload(i: Interpretation, c: Ctx, extra: Record<string, unknown>
   return {
     tipo: i.tipo, valor: i.valor, data: i.data, descricao: i.descricao, estabelecimento: i.estabelecimento,
     categoria: i.categoria, subcategoria: i.subcategoria, conta: i.conta, conta_destino: i.conta_destino,
-    parcelas: i.parcelas, forma_pagamento: i.forma_pagamento, familia: i.familia,
+    parcelas: i.parcelas, forma_pagamento: i.forma_pagamento, familia: i.familia, cartao: i.cartao,
     origem: origin(c),
     mensagem_original: c.msg.content,
     transcricao: c.msg.type === "audio" ? c.msg.content : undefined,
@@ -282,6 +296,16 @@ async function createFlow(i: Interpretation, c: Ctx, extra: Record<string, unkno
         reply: `Não encontrei a conta “${r.conta}”. Suas contas: ${c.uc.contas.join(", ")}. Em qual devo registrar?`,
         pending: { kind: "ask_account", interp: i, campo: "conta" },
       };
+    case "needs_card": case "unknown_card":
+      return {
+        reply: `${r.status === "unknown_card" ? `Não encontrei o cartão “${r.cartao}”. ` : ""}Em qual cartão foi ${TIPO_LABEL[tipo] === "uma despesa" ? "a compra" : "o lançamento"} de ${brl(Math.round(i.valor * 100))}? ${r.cartoes.join(" · ")}`,
+        pending: { kind: "ask_card", interp: i, options: r.cartoes },
+      };
+    case "no_cards":
+      return {
+        reply: `Você ainda não cadastrou cartões de crédito (cadastre em *Cartões* no app). Registro os ${brl(Math.round(i.valor * 100))} como gasto na conta? (*sim* / *não*)`,
+        pending: { kind: "confirm_create", interp: { ...i, cartao: undefined, forma_pagamento: undefined } },
+      };
     case "needs_destination_account":
       return {
         reply: `Para qual conta foi a transferência? Suas contas: ${c.uc.contas.join(", ")}.`,
@@ -299,7 +323,7 @@ async function createdReply(r: any, i: Interpretation, c: Ctx): Promise<Outcome>
   const cat = t.categoria ? `**${t.categoria}${t.subcategoria ? ` > ${t.subcategoria}` : ""}**` : "";
   const icon = SUB_ICON[t.subcategoria] ?? t.icone ?? "✅";
   const parc = r.parcelas > 1 ? ` em ${r.parcelas}x de ${brl(r.valor_parcela_cents)} (1ª parcela em ${dateBR(t.data)})` : "";
-  const conta = i.conta ? ` na conta ${t.conta}` : "";
+  const conta = t.cartao ? ` no cartão **${t.cartao}**` : i.conta ? ` na conta ${t.conta}` : "";
   let reply: string;
   switch (t.tipo) {
     case "receita": reply = `💰 Registrei${when} sua receita de **${brl(r.valor_total_cents)}** em ${cat}${conta}. ✅`; break;
@@ -310,6 +334,19 @@ async function createdReply(r: any, i: Interpretation, c: Ctx): Promise<Outcome>
   }
   if (isFamily(c) && t.membro_id === null && ["despesa", "receita"].includes(t.tipo)) reply += `\n👨‍👩‍👧 Lançado como gasto da **Família** (compartilhado).`;
   if (r.categoria_origem === "aprendida") reply += `\n(Reconheci “${t.estabelecimento}” pelo seu histórico.)`;
+  if (r.cartao && r.fatura) {
+    reply += `\n💳 Entra na fatura que vence em ${dateBR(r.lancamento.fatura_vencimento)}${r.parcelas > 1 ? " (1ª parcela)" : ""}.`;
+    if (r.limite_disponivel_cents != null) reply += ` Limite disponível: ${brl(r.limite_disponivel_cents)}.`;
+  }
+  if (!r.cartao && i.forma_pagamento === "credito" && !(c.uc.cartoes ?? []).length) {
+    reply += `\n💡 Dica: cadastre seus cartões em *Cartões* no app para eu separar as compras por fatura e controlar o limite.`;
+  }
+  if (r.orcamento && r.orcamento.percentual >= 80) {
+    const o = r.orcamento;
+    reply += o.percentual >= 100
+      ? `\n🚨 ${o.categoria} passou do orçamento do mês: ${brl(o.gasto_cents)} de ${brl(o.limite_cents)} (${Math.round(o.percentual)}%).`
+      : `\n⚠️ ${o.categoria} já usou ${Math.round(o.percentual)}% do orçamento (${brl(o.gasto_cents)} de ${brl(o.limite_cents)}).`;
+  }
   if ((i.categoria_confianca ?? 1) < 0.8 && t.categoria === "Outros") reply += `\nSe preferir outra categoria, é só dizer: “muda a categoria para …”.`;
   if (t.tipo === "receita") {
     const a = await c.deps.db.rpc<any>("fe_available", c.user, {});
@@ -318,14 +355,45 @@ async function createdReply(r: any, i: Interpretation, c: Ctx): Promise<Outcome>
   return { reply, cards: [{ type: "transaction", data: { ...t, valor_total_cents: r.valor_total_cents, parcelas: r.parcelas } }], pending: null };
 }
 
-function recurringFlow(i: Interpretation): Outcome {
+async function recurringFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
   if (i.valor === undefined) return { reply: "Qual é o valor desse lançamento recorrente?", pending: { kind: "ask_value", interp: { ...i, intent: "CREATE_RECURRING" } } };
   const tipo = i.tipo === "receita" ? "receita" : "despesa";
-  const cat = i.categoria ? ` em ${i.categoria}${i.subcategoria ? ` > ${i.subcategoria}` : ""}` : "";
-  return {
-    reply: `🔁 Entendi ${TIPO_LABEL[tipo]} recorrente de ${brl(Math.round(i.valor * 100))}${cat}.\nO cadastro automático de recorrências chega na próxima fase do app. Quer que eu registre o lançamento deste mês agora${i.data ? ` (${dateBR(i.data)})` : ""}? Responda *sim* ou *não*.`,
-    pending: { kind: "confirm_create", interp: { ...i, intent: tipo === "receita" ? "CREATE_INCOME" : "CREATE_EXPENSE", recorrente: false } },
-  };
+  const r = await c.deps.db.rpc<any>("fe_save_recurring", c.user, {
+    tipo, valor: i.valor, descricao: i.descricao, categoria: i.categoria, subcategoria: i.subcategoria, conta: i.conta, cartao: i.cartao,
+    frequencia: i.frequencia, dia: i.dia, dia_util: i.dia_util, familia: i.familia, origem: origin(c),
+  });
+  const rec = { ...i, intent: "CREATE_RECURRING" as const };
+  if (r.status === "needs_category") {
+    return { reply: `Entendi ${TIPO_LABEL[tipo]} recorrente de ${brl(Math.round(i.valor * 100))}. Em qual categoria?\n${categoryList(c, tipo)}`, pending: { kind: "ask_category", interp: rec } };
+  }
+  if (r.status === "unknown_card") {
+    const cards = c.uc.cartoes ?? [];
+    return cards.length
+      ? { reply: `Em qual cartão? ${cards.join(" · ")}`, pending: { kind: "ask_card", interp: rec, options: cards } }
+      : { reply: "Você ainda não cadastrou cartões. Cadastre em *Cartões* no app e me diga de novo. 🙂", pending: null };
+  }
+  if (r.status === "unknown_account") return { reply: `Não encontrei a conta “${r.conta}”. Suas contas: ${c.uc.contas.join(", ")}.`, pending: { kind: "ask_account", interp: rec, campo: "conta" } };
+  const x = r.recorrencia;
+  const onde = x.cartao ? ` no cartão ${x.cartao}` : x.conta ? ` (${x.conta})` : "";
+  let reply = `🔄 Conta fixa criada: **${x.descricao}** — ${brl(x.valor_cents)} ${x.quando}${onde}, em ${x.categoria}${x.subcategoria ? ` > ${x.subcategoria}` : ""}.`;
+  reply += `\nVou lançar sozinho todo período${x.proxima ? `; o próximo é em ${dateBR(r.primeira)}` : ""}. Para parar, é só dizer “não pago mais ${x.descricao.toLowerCase()}”.`;
+  if (r.data_mes_atual) {
+    reply += `\n\nA deste mês (${dateBR(r.data_mes_atual)}) já passou. Quer que eu registre também? (*sim* / *não*)`;
+    return { reply, pending: { kind: "confirm_create", interp: { ...i, intent: tipo === "receita" ? "CREATE_INCOME" : "CREATE_EXPENSE", recorrente: false, data: r.data_mes_atual, data_explicita: true } } };
+  }
+  return { reply, pending: null };
+}
+
+/** Encaminha uma interpretação já completa para o fluxo certo (usado ao responder perguntas pendentes). */
+function saveFlow(i: Interpretation, c: Ctx, extra: Record<string, unknown> = {}): Promise<Outcome> {
+  switch (i.intent) {
+    case "CREATE_RECURRING": return recurringFlow(i, c);
+    case "CREATE_GOAL": return goalCreateFlow(i, c);
+    case "GOAL_CONTRIBUTE": return goalContributeFlow(i, c);
+    case "CREATE_BUDGET": return budgetSetFlow(i, c);
+    case "PAY_INVOICE": return payInvoiceFlow(i, c);
+    default: return createFlow(i, c, extra);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -353,7 +421,7 @@ async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
     }
     case "ask_category": {
       const cat = pickCategory(text, c, p.interp.tipo);
-      if (cat) return createFlow({ ...p.interp, ...cat, categoria_confianca: 1 }, c);
+      if (cat) return saveFlow({ ...p.interp, ...cat, categoria_confianca: 1 }, c);
       if (!looksLikeNewCommand(text, c.uc)) {
         return { reply: `Não encontrei essa categoria. Escolha uma destas (ou crie uma nova em Categorias):\n${categoryList(c, p.interp.tipo ?? "despesa")}` };
       }
@@ -363,7 +431,7 @@ async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
       const a = extractAmount(text);
       if (a.valor && !looksLikeNewCommand(text, c.uc)) {
         const interp = { ...p.interp, valor: a.valor, alternativas: a.alternativas };
-        return interp.intent === "CREATE_RECURRING" ? recurringFlow(interp) : createFlow(interp, c);
+        return saveFlow(interp, c);
       }
       if (!looksLikeNewCommand(text, c.uc)) return { reply: "Não identifiquei o valor. Pode me dizer só o número? Ex.: 120,50" };
       break;
@@ -381,7 +449,7 @@ async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
     }
     case "ask_account": {
       const acc = c.uc.contas.find((a) => n.includes(norm(a)));
-      if (acc) return createFlow({ ...p.interp, [p.campo]: acc }, c);
+      if (acc) return saveFlow({ ...p.interp, [p.campo]: acc }, c);
       if (!looksLikeNewCommand(text, c.uc)) return { reply: `Não encontrei essa conta. Suas contas: ${c.uc.contas.join(", ")}.` };
       break;
     }
@@ -390,6 +458,25 @@ async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
         const r = await c.deps.db.rpc<any>("fe_delete_transaction", c.user, { id: p.id, origem: origin(c) });
         if (r.status !== "deleted") return { reply: "Esse lançamento não existe mais.", pending: null };
         return { reply: `🗑️ Apaguei ${p.label}${r.quantidade > 1 ? ` (${r.quantidade} parcelas)` : ""}.`, pending: null };
+      }
+      break;
+    }
+    case "ask_card": {
+      const card = matchCard(text, c.uc) ?? p.options.find((o) => norm(o).includes(n) || n.includes(norm(o)));
+      if (card) return saveFlow({ ...p.interp, cartao: card }, c);
+      if (!looksLikeNewCommand(text, c.uc)) return { reply: `Não encontrei esse cartão. Seus cartões: ${p.options.join(" · ")}` };
+      break;
+    }
+    case "ask_goal": {
+      const g = matchGoal(text, c.uc) ?? p.options.find((o) => norm(o).includes(n) || n.includes(norm(o)));
+      if (g) return saveFlow({ ...p.interp, meta: g }, c);
+      if (!looksLikeNewCommand(text, c.uc)) return { reply: `Não encontrei essa meta. Suas metas: ${p.options.join(" · ")}` };
+      break;
+    }
+    case "confirm_cancel_recurring": {
+      if (yes) {
+        const r = await c.deps.db.rpc<any>("fe_cancel_recurring", c.user, { id: p.id, origem: origin(c) });
+        return { reply: `✅ Pronto, encerrei ${p.label}.${r.futuros_removidos ? ` Tirei ${r.futuros_removidos} lançamento(s) futuro(s) que já estavam previstos.` : ""}`, pending: null };
       }
       break;
     }
@@ -494,6 +581,153 @@ async function correctFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
 // ---------------------------------------------------------------------------
 // CONSULTAS (sempre com dados reais do banco)
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Cartões e faturas
+// ---------------------------------------------------------------------------
+const SITUACAO: Record<string, string> = { aberta: "aberta", fechada: "fechada, aguardando pagamento", vencida: "⚠️ vencida", paga: "✅ paga", vazia: "sem lançamentos" };
+
+async function cardsQuery(i: Interpretation, c: Ctx): Promise<Outcome> {
+  const cards = await c.deps.db.rpc<any[]>("fe_cards", c.user, {});
+  if (!cards.length) return { reply: "Você ainda não cadastrou cartões de crédito. Cadastre em *Cartões* no app (nome, dia de fechamento e de vencimento) e depois é só dizer “gastei 50 no cartão”. 💳" };
+  const alvo = i.cartao ? cards.filter((k) => k.nome === i.cartao) : cards;
+  if (i.consulta === "limite") {
+    return { reply: alvo.map((k) => k.limite_cents == null ? `💳 ${k.nome}: limite não informado (usado ${brl(k.usado_cents)}).`
+      : `💳 ${k.nome}: limite ${brl(k.limite_cents)} · usado ${brl(k.usado_cents)} · **disponível ${brl(k.disponivel_cents)}**`).join("\n") };
+  }
+  if (i.consulta === "cartoes") {
+    return { reply: "💳 Seus cartões:\n" + cards.map((k) => `• ${k.nome}: fecha dia ${k.fechamento}, vence dia ${k.vencimento} — fatura atual ${brl(k.fatura_atual.total_cents)}`).join("\n") };
+  }
+  const proxima = /proxim|que vem/.test(norm(c.msg.content));
+  const lines = alvo.map((k) => {
+    const ant = k.fatura_anterior, cur = k.fatura_atual;
+    if (proxima) {
+      const nx = k.proximas[0];
+      return nx ? `💳 ${k.nome}: a próxima fatura (vence ${dateBR(nx.vencimento)}) já tem **${brl(nx.total_cents)}** lançados.` : `💳 ${k.nome}: a próxima fatura ainda não tem lançamentos.`;
+    }
+    let l = `💳 **${k.nome}** — fatura atual: **${brl(cur.total_cents)}** (fecha ${dateBR(cur.fechamento)}, vence ${dateBR(cur.vencimento)}, ${SITUACAO[cur.situacao] ?? cur.situacao}).`;
+    if (ant.total_cents > 0 && ant.situacao !== "paga") l += `\n   Fatura anterior (venc. ${dateBR(ant.vencimento)}): ${brl(ant.restante_cents)} a pagar — ${SITUACAO[ant.situacao]}.`;
+    else if (ant.total_cents > 0) l += `\n   Fatura anterior (venc. ${dateBR(ant.vencimento)}): ${brl(ant.total_cents)} — paga.`;
+    if (k.limite_cents != null) l += `\n   Limite disponível: ${brl(k.disponivel_cents)}.`;
+    return l;
+  });
+  return { reply: lines.join("\n") };
+}
+
+async function payInvoiceFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
+  const r = await c.deps.db.rpc<any>("fe_pay_invoice", c.user, { cartao: i.cartao, valor: i.valor, conta: i.conta, data: i.data, origem: origin(c), mensagem_original: c.msg.content });
+  if (r.status === "needs_card" || r.status === "unknown_card") {
+    if (!r.cartoes?.length) return { reply: "Você ainda não cadastrou cartões. Cadastre em *Cartões* no app. 💳", pending: null };
+    return { reply: `${r.status === "unknown_card" ? "Não encontrei esse cartão. " : ""}Qual fatura você pagou? ${r.cartoes.join(" · ")}`, pending: { kind: "ask_card", interp: { ...i, intent: "PAY_INVOICE" }, options: r.cartoes } };
+  }
+  if (r.status === "unknown_account") return { reply: `Não encontrei a conta “${r.conta}”. Suas contas: ${c.uc.contas.join(", ")}.`, pending: { kind: "ask_account", interp: { ...i, intent: "PAY_INVOICE" }, campo: "conta" } };
+  if (r.status === "nothing_to_pay") return { reply: `A fatura do ${r.cartao} com vencimento em ${dateBR(r.fatura.vencimento)} não tem valor em aberto. 👍`, pending: null };
+  const f = r.fatura;
+  return {
+    reply: `✅ Registrei o pagamento de **${brl(r.valor_cents)}** da fatura do ${r.cartao} (venc. ${dateBR(f.vencimento)}), saindo da conta ${r.conta}.` +
+      (f.restante_cents > 0 ? `\nAinda restam ${brl(f.restante_cents)} nessa fatura.` : "\nFatura quitada. 🎉") +
+      `\n_Pagamento de fatura não conta como despesa nova: as compras já foram contadas quando você gastou._`,
+    cards: [{ type: "transaction", data: r.lancamento }], pending: null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Metas
+// ---------------------------------------------------------------------------
+function goalLine(g: any): string {
+  let l = `${g.icone ?? "🎯"} **${g.nome}**: ${brl(g.atual_cents)} de ${brl(g.objetivo_cents)} (${Math.round(g.progresso)}%)`;
+  if (g.status === "concluida") return l + " — concluída! 🎉";
+  l += ` · faltam ${brl(g.falta_cents)}`;
+  if (g.prazo) l += `\n   Prazo ${dateBR(g.prazo)}: guardar ~${brl(g.por_mes_cents ?? 0)}/mês (${brl(g.por_semana_cents ?? 0)}/semana)`;
+  if (g.previsao) l += `\n   No ritmo atual, conclui por volta de ${dateBR(g.previsao)} (estimativa)${g.atrasada ? " — depois do prazo ⚠️" : ""}`;
+  return l;
+}
+
+async function goalCreateFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
+  if (i.valor === undefined) return { reply: "Qual é o valor que você quer juntar?", pending: { kind: "ask_value", interp: { ...i, intent: "CREATE_GOAL" } } };
+  const r = await c.deps.db.rpc<any>("fe_save_goal", c.user, { nome: i.meta ?? "Minha meta", valor: i.valor, prazo: i.prazo, origem: origin(c) });
+  const g = r.meta;
+  let reply = `🎯 Meta criada: **${g.nome}** — ${brl(g.objetivo_cents)}${g.prazo ? ` até ${dateBR(g.prazo)}` : ""}.`;
+  if (g.por_mes_cents) reply += `\nPara chegar lá, guarde cerca de **${brl(g.por_mes_cents)} por mês** (${brl(g.por_semana_cents)} por semana).`;
+  else reply += `\nSem prazo definido — se quiser, diga “até dezembro” ou ajuste em *Metas* no app.`;
+  reply += `\nQuando guardar dinheiro, me diga: “guardei 500 na meta ${g.nome.toLowerCase()}”.`;
+  return { reply, pending: null };
+}
+
+async function goalContributeFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
+  if (i.valor === undefined) return { reply: "Qual foi o valor?", pending: { kind: "ask_value", interp: { ...i, intent: "GOAL_CONTRIBUTE" } } };
+  const r = await c.deps.db.rpc<any>("fe_goal_contribute", c.user, { meta: i.meta, valor: i.valor, data: i.data, origem: origin(c) });
+  if (r.status === "no_goals") return { reply: "Você ainda não tem metas. Crie uma dizendo, por exemplo: “quero juntar 5 mil até dezembro para a viagem”. 🎯", pending: null };
+  if (r.status === "needs_goal") return { reply: `Em qual meta? ${r.metas.join(" · ")}`, pending: { kind: "ask_goal", interp: { ...i, intent: "GOAL_CONTRIBUTE" }, options: r.metas } };
+  const g = r.meta;
+  const verbo = r.valor_cents > 0 ? `Guardei ${brl(r.valor_cents)} na` : `Tirei ${brl(-r.valor_cents)} da`;
+  return { reply: `💰 ${verbo} meta **${g.nome}**.\n${goalLine(g)}`, pending: null };
+}
+
+async function goalsQuery(i: Interpretation, c: Ctx): Promise<Outcome> {
+  const gs = (await c.deps.db.rpc<any[]>("fe_goals", c.user, {})).filter((g) => !i.meta || g.nome === i.meta);
+  if (!gs.length) return { reply: "Você ainda não tem metas. Crie uma dizendo, por exemplo: “quero juntar 20 mil até dezembro para a viagem”. 🎯" };
+  return { reply: gs.map(goalLine).join("\n\n") };
+}
+
+// ---------------------------------------------------------------------------
+// Orçamentos
+// ---------------------------------------------------------------------------
+async function budgetSetFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
+  if (i.valor === undefined) return { reply: "Qual valor de orçamento por mês?", pending: { kind: "ask_value", interp: { ...i, intent: "CREATE_BUDGET" } } };
+  if (!i.categoria) return { reply: `Para qual categoria? ${categoryList(c, "despesa")}`, pending: { kind: "ask_category", interp: { ...i, intent: "CREATE_BUDGET", tipo: "despesa" } } };
+  const r = await c.deps.db.rpc<any>("fe_set_budget", c.user, { categoria: i.categoria, valor: i.valor, origem: origin(c) });
+  if (r.status === "unknown_category") return { reply: `Não encontrei a categoria “${r.categoria}”.\n${categoryList(c, "despesa")}`, pending: { kind: "ask_category", interp: { ...i, intent: "CREATE_BUDGET", tipo: "despesa" } } };
+  const st = r.situacao;
+  let reply = r.valor_cents === 0 ? `Pronto, tirei o orçamento de ${r.categoria}.` : `💵 Orçamento de **${r.categoria}**: ${brl(r.valor_cents)} por mês, a partir deste mês.`;
+  if (st) reply += `\nEste mês: ${brl(st.gasto_cents)} gastos (${Math.round(st.percentual)}%). Aviso quando chegar a 80%.`;
+  return { reply, pending: null };
+}
+
+async function budgetsQuery(c: Ctx): Promise<Outcome> {
+  const b = await c.deps.db.rpc<any>("fe_budgets", c.user, {});
+  if (!b.itens.length) return { reply: "Você ainda não definiu orçamentos. Ex.: “orçamento de 1.000 para alimentação”. 💵" };
+  const ico = (s: string) => s === "estourado" ? " 🚨" : s === "atencao" ? " ⚠️" : "";
+  const lines = b.itens.map((x: any) => `${x.icone ?? "•"} ${x.categoria}: ${brl(x.gasto_cents)} / ${brl(x.limite_cents)} (${Math.round(x.percentual)}%)${ico(x.situacao)}`);
+  return {
+    reply: `💵 Orçamento do mês:\n${lines.join("\n")}\n**Total: ${brl(b.total_gasto_cents)} de ${brl(b.total_limite_cents)}**`,
+    cards: [{ type: "bars", title: "Orçamento do mês", items: b.itens.map((x: any) => ({ label: x.categoria, icon: x.icone, value_cents: x.gasto_cents, pct: Math.min(100, x.percentual), hint: `de ${brl(x.limite_cents)}` })) }],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Contas fixas (recorrências) e alertas
+// ---------------------------------------------------------------------------
+async function recurringsQuery(c: Ctx): Promise<Outcome> {
+  const r = await c.deps.db.rpc<any>("fe_recurrings", c.user, {});
+  if (!r.itens.length) return { reply: "Você ainda não tem contas fixas cadastradas. Ex.: “minha internet custa 120 todo dia 10”. 🔄" };
+  const line = (x: any) => `• ${x.descricao}: ${brl(x.valor_cents)} ${x.quando}${x.cartao ? ` (cartão ${x.cartao})` : ""}${x.proxima ? ` — próx. ${dateBR(x.proxima)}` : ""}`;
+  const desp = r.itens.filter((x: any) => x.tipo === "despesa"), rec = r.itens.filter((x: any) => x.tipo === "receita");
+  let reply = "";
+  if (rec.length) reply += `💰 Receitas fixas:\n${rec.map(line).join("\n")}\n`;
+  if (desp.length) reply += `${rec.length ? "\n" : ""}🔄 Despesas fixas:\n${desp.map(line).join("\n")}\n`;
+  reply += `\nPor mês: ${brl(r.receitas_mes_cents)} de receitas e ${brl(r.despesas_mes_cents)} de despesas fixas.`;
+  return { reply };
+}
+
+async function cancelRecurringFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
+  const r = await c.deps.db.rpc<any>("fe_recurrings", c.user, {});
+  const alvo = norm(i.descricao ?? "");
+  const found = r.itens.filter((x: any) => alvo && (norm(x.descricao).includes(alvo) || alvo.includes(norm(x.descricao)) || norm(x.subcategoria ?? "").includes(alvo)));
+  if (found.length !== 1) {
+    if (!r.itens.length) return { reply: "Você não tem contas fixas cadastradas." };
+    return { reply: `${found.length ? "Encontrei mais de uma" : "Não encontrei essa conta fixa"}. Qual devo encerrar? ${r.itens.map((x: any) => x.descricao).join(" · ")}` };
+  }
+  const x = found[0];
+  const label = `**${x.descricao}** (${brl(x.valor_cents)} ${x.quando})`;
+  return { reply: `Vou encerrar a conta fixa ${label}: ela para de ser lançada e tiro os lançamentos futuros já previstos. Confirma? (*sim* / *não*)`, pending: { kind: "confirm_cancel_recurring", id: x.id, label } };
+}
+
+async function alertsQuery(c: Ctx): Promise<Outcome> {
+  const a = await c.deps.db.rpc<any[]>("fe_alerts", c.user, {});
+  if (!a.length) return { reply: "Nenhum alerta no momento. 👍 Orçamentos, faturas e metas estão em dia." };
+  return { reply: "🔔 Alertas:\n" + a.map((x) => `${x.icone} ${x.texto}`).join("\n") };
+}
+
 function capToToday(i: Interpretation, c: Ctx) {
   const p = i.periodo ?? { inicio: c.uc.hoje.slice(0, 8) + "01", fim: c.uc.hoje, label: "neste mês" };
   const fim = p.inicio <= c.uc.hoje && p.fim > c.uc.hoje ? c.uc.hoje : p.fim;
@@ -561,6 +795,7 @@ async function available(c: Ctx, focoHoje = false): Promise<Outcome> {
   const a = await c.deps.db.rpc<any>("fe_available", c.user, {});
   const fatos = [`Saldo atual nas contas: **${brl(a.saldo_atual_cents)}**`];
   if (a.despesas_previstas_cents) fatos.push(`despesas já lançadas até ${dateBR(a.fim_mes)}: ${brl(a.despesas_previstas_cents)}`);
+  if (a.faturas_cents) fatos.push(`faturas de cartão a pagar: ${brl(a.faturas_cents)}`);
   if (a.receitas_previstas_cents) fatos.push(`receitas previstas: ${brl(a.receitas_previstas_cents)}`);
   if (a.meta_economia_cents) fatos.push(`meta de economia do mês: ${brl(a.meta_economia_cents)}`);
   let reply = `📌 ${fatos.join("; ")}.\n\n`;
@@ -610,6 +845,7 @@ async function overview(c: Ctx): Promise<Outcome> {
   if (o.por_categoria.length) {
     reply += `\n\nMaiores gastos: ` + o.por_categoria.slice(0, 3).map((x: any) => `${x.icone ?? ""} ${x.categoria} ${brl(x.total_cents)}`).join(" · ");
   }
+  if (o.alertas?.length) reply += `\n\n🔔 ` + o.alertas.slice(0, 3).map((x: any) => `${x.icone} ${x.texto}`).join("\n");
   reply += `\n\n**Estimativa:** ${a.disponivel_cents > 0 ? `seu limite para novos gastos até o fim do mês é de cerca de ${brl(a.disponivel_cents)} (${brl(a.diario_cents)}/dia)` : "não há folga para novos gastos até o fim do mês"}${a.meta_economia_cents ? `, considerando sua meta de guardar ${brl(a.meta_economia_cents)}` : ""}.`;
   return {
     reply,

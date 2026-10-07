@@ -5,6 +5,7 @@ export const INTENTS = [
   "QUERY_BALANCE", "QUERY_EXPENSES", "QUERY_INCOME", "QUERY_CATEGORY", "QUERY_REPORT", "QUERY_CARD", "QUERY_ACCOUNT",
   "QUERY_BUDGET", "QUERY_GOAL", "CREATE_GOAL", "CREATE_BUDGET", "EDIT_TRANSACTION", "DELETE_TRANSACTION",
   "CORRECT_CATEGORY", "FINANCIAL_ANALYSIS", "HELP", "GREETING", "OTHER",
+  "PAY_INVOICE", "GOAL_CONTRIBUTE", "QUERY_RECURRING", "CANCEL_RECURRING", "QUERY_ALERTS",
 ] as const;
 export type Intent = typeof INTENTS[number];
 
@@ -22,7 +23,8 @@ export interface IncomingMessage {
 }
 
 export type QueryKind =
-  | "total" | "maior" | "parcelas" | "saldo" | "disponivel" | "resumo" | "comparar" | "gastando_demais" | "posso_comprar";
+  | "total" | "maior" | "parcelas" | "saldo" | "disponivel" | "resumo" | "comparar" | "gastando_demais" | "posso_comprar"
+  | "fatura" | "limite" | "cartoes";
 
 export interface Interpretation {
   intent: Intent;
@@ -47,6 +49,12 @@ export interface Interpretation {
   saudacao?: string;              // "Bom dia" quando a mensagem começa com cumprimento
   familia?: boolean;              // lançamento compartilhado da família ("gastamos", "da casa")
   membro_id?: string;             // filtro de consulta: id da pessoa | 'familia' (só compartilhados)
+  cartao?: string;                // nome do cartão de crédito
+  meta?: string;                  // nome da meta financeira
+  prazo?: string;                 // AAAA-MM-DD (metas)
+  frequencia?: "mensal" | "semanal" | "anual";
+  dia?: number;                   // dia do mês (recorrência)
+  dia_util?: number;              // n-ésimo dia útil (recorrência)
   confidence: number;
   provider?: string;
   model?: string;
@@ -61,6 +69,8 @@ export interface UserContext {
   membros?: Member[];
   categorias: { tipo: "despesa" | "receita"; nome: string; icone?: string; subcategorias: string[] }[];
   contas: string[];
+  cartoes?: string[];
+  metas?: string[];
 }
 
 export interface Card {
