@@ -174,6 +174,27 @@ describe("conversa completa", () => {
 });
 
 describe("isolamento entre usuários", () => {
+  test("dois gastos na mesma mensagem viram dois lançamentos", async () => {
+    const r = await say("Gastei R$ 23,00 no mercado e R$ 47,00 em combustível para o carro.");
+    expect(r.reply).toContain("1)");
+    expect(r.reply).toContain("Alimentação > Supermercado");
+    expect(r.reply).toContain("2)");
+    expect(r.reply).toContain("Transporte > Combustível");
+    const rows = await q(`select amount_cents from transactions where user_id=$1 and deleted_at is null and amount_cents in (2300, 4700) order by amount_cents`, user);
+    expect(rows.map((x: any) => Number(x.amount_cents))).toEqual([2300, 4700]);
+  });
+
+  test("vários itens: pergunta a categoria de um e depois registra o resto", async () => {
+    const r1 = await say("gastei 36 na Loja do Zé e 19 na padaria");
+    expect(r1.reply).toContain("Em qual categoria");
+    expect(r1.reply).toContain("próximo item");
+    const r2 = await say("lazer");
+    expect(r2.reply).toContain("Lazer");
+    expect(r2.reply).toContain("Alimentação > Padaria");
+    const rows = await q(`select amount_cents from transactions where user_id=$1 and deleted_at is null and amount_cents in (3600, 1900)`, user);
+    expect(rows.length).toBe(2);
+  });
+
   test("outro usuário não vê os dados", async () => {
     const r = await handleMessage({ user_id: other, channel: "app", type: "text", content: "quanto gastei esse mês?", timestamp: "" }, { db });
     expect(r.reply).toContain("Não encontrei");

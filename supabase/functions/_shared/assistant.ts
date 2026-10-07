@@ -8,13 +8,15 @@ import type { AssistantReply, Card, EngineDb, IncomingMessage, Interpretation, U
 import { interpret, type AiConfig } from "./ai.ts";
 import { interpretRules, matchUserCategory } from "./interpreter_rules.ts";
 import { guessCategory } from "./categorizer.ts";
-import { extractAmount } from "./money.ts";
+import { extractAmount, findAmounts } from "./money.ts";
 import { resolveDate, addDays } from "./dates.ts";
 import { brl, dateBR, norm, pct } from "./text.ts";
 
 export interface AssistantDeps { db: EngineDb; ai?: AiConfig; }
 
-type Pending =
+export interface QueueItem { texto: string; data?: string; }
+
+type Pending = (
   | { kind: "ask_value"; interp: Interpretation }
   | { kind: "choose_value"; interp: Interpretation; options: number[] }
   | { kind: "ask_category"; interp: Interpretation }
@@ -23,7 +25,8 @@ type Pending =
   | { kind: "confirm_duplicate"; interp: Interpretation }
   | { kind: "confirm_create"; interp: Interpretation }
   | { kind: "confirm_delete"; id: string; label: string }
-  | { kind: "ask_correction"; id: string; label: string; tipo: string };
+  | { kind: "ask_correction"; id: string; label: string; tipo: string }
+) & { fila?: QueueItem[] };
 
 interface Outcome extends AssistantReply { pending?: Pending | null; }
 
@@ -59,7 +62,18 @@ export async function handleMessage(msg: IncomingMessage, deps: AssistantDeps): 
   let out: Outcome | null = null;
   try {
     if (!content) out = { reply: "Não consegui entender o áudio. Pode repetir ou digitar?" };
-    if (!out && state.pending) out = await resolvePending(state.pending, c);
+    if (!out && state.pending) {
+      out = await resolvePending(state.pending, c);
+      const fila = state.pending.fila ?? [];
+      if (out && out.pending === null && fila.length) {
+        const more = await processQueue(fila, c, saved.id);
+        out = { reply: `${out.reply}\n\n${more.reply}`, cards: [...(out.cards ?? []), ...(more.cards ?? [])], pending: more.pending ?? null };
+      }
+    }
+    if (!out) {
+      const itens = splitItems(content, uc);
+      if (itens) out = await processQueue(itens, c, saved.id);
+    }
     if (!out) {
       const interp = await interpret(content, uc, deps.ai);
       const log = await db.rpc<{ id: string }>("fe_log_interpretation", user, {
@@ -83,6 +97,75 @@ export async function handleMessage(msg: IncomingMessage, deps: AssistantDeps): 
 // ---------------------------------------------------------------------------
 // Roteamento por intenção
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Vários lançamentos numa só mensagem: "gastei 20 no mercado e 50 de combustível"
+// ---------------------------------------------------------------------------
+const CREATE_INTENTS = new Set(["CREATE_EXPENSE", "CREATE_INCOME", "CREATE_RECURRING", "CREATE_INVESTMENT", "CREATE_REDEMPTION", "CREATE_TRANSFER"]);
+const SEP = /(\s*(?:;|,(?=\s))\s*(?:e\s+)?|\s+e\s+(?:tamb[eé]m\s+|mais\s+)?|\s+mais\s+|\s+depois\s+)/i;
+
+function itemOk(text: string, uc: UserContext): boolean {
+  const r = interpretRules(text, uc);
+  return CREATE_INTENTS.has(r.intent) && r.valor !== undefined && !r.alternativas && !!(r.categoria || r.estabelecimento || r.descricao || r.conta_destino);
+}
+
+/** Divide a mensagem em vários lançamentos, ou devolve null se for um só. */
+export function splitItems(text: string, uc: UserContext): QueueItem[] | null {
+  const n = norm(text);
+  if (/\?\s*$/.test(text) || /^(quanto|qual|quais|posso|como|compare|compara)\b/.test(n) || /\bou\b/.test(n)) return null;
+  if (findAmounts(text).filter((a) => a.role === "valor" && a.value > 0).length < 2) return null;
+  const parts = text.split(SEP);
+  const pieces: string[] = [];
+  let cur = parts[0];
+  for (let i = 1; i < parts.length; i += 2) {
+    const next = parts[i + 1] ?? "";
+    // só separa quando os dois lados já formam lançamentos completos
+    const prefixo = verbPrefix(cur);
+    if (itemOk(cur, uc) && (itemOk(next, uc) || (prefixo && itemOk(prefixo + next, uc)))) { pieces.push(cur); cur = next; }
+    else cur = cur + parts[i] + next;
+  }
+  pieces.push(cur);
+  if (pieces.length < 2) return null;
+  const quando = resolveDate(text, uc.hoje);
+  const prefixo = verbPrefix(pieces[0]);
+  return pieces.map((p) => {
+    const semVerbo = prefixo && !verbPrefix(p) && interpretRules(p, uc).confidence < 0.85;
+    const texto = (semVerbo ? prefixo + p : p).trim().replace(/[.!]+$/, "");
+    const d = resolveDate(texto, uc.hoje);
+    return { texto, data: !d.explicita && quando.explicita ? quando.data : undefined };
+  });
+}
+
+/** "Gastei R$ 20 no mercado" -> "Gastei " (verbo inicial para repetir nos próximos itens) */
+function verbPrefix(text: string): string {
+  const m = text.match(/^\s*((?:eu\s+|n[oó]s\s+|a gente\s+)?[a-zà-ú]+(?:\s+(?:com|de|em))?\s+)(?=r\$|\d|[a-zà-ú]+\s)/i);
+  if (!m) return "";
+  return /^(eu\s+|n[oó]s\s+|a gente\s+)?(gastei|gastamos|paguei|pagamos|comprei|compramos|recebi|recebemos|ganhei|ganhamos|investi|apliquei|abasteci|pedi|pedimos)\b/i.test(m[1].trim()) ? m[1] : "";
+}
+
+async function processQueue(itens: QueueItem[], c: Ctx, chatMessageId: string): Promise<Outcome> {
+  const replies: string[] = [];
+  const cards: Card[] = [];
+  for (let k = 0; k < itens.length; k++) {
+    const it = itens[k];
+    const interp = await interpret(it.texto, c.uc, c.deps.ai);
+    if (it.data && !interp.data_explicita && CREATE_INTENTS.has(interp.intent)) { interp.data = it.data; interp.data_explicita = true; }
+    const log = await c.deps.db.rpc<{ id: string }>("fe_log_interpretation", c.user, {
+      chat_message_id: chatMessageId, provider: interp.provider ?? "regras", model: interp.model,
+      input: it.texto, output: interp, confidence: interp.confidence,
+    });
+    c.interpretationId = log.id;
+    const o = await dispatch(interp, { ...c, msg: { ...c.msg, content: it.texto } });
+    replies.push(itens.length > 1 ? `${k + 1}) ${o.reply}` : o.reply);
+    cards.push(...(o.cards ?? []));
+    if (o.pending) {
+      const resto = itens.slice(k + 1);
+      if (resto.length) replies.push(`(Depois disso registro ${resto.length === 1 ? "o próximo item" : `os outros ${resto.length} itens`}.)`);
+      return { reply: replies.join("\n"), cards, pending: { ...o.pending, fila: resto } };
+    }
+  }
+  return { reply: replies.join("\n"), cards, pending: null };
+}
+
 async function dispatch(i: Interpretation, c: Ctx): Promise<Outcome> {
   const greet = i.saudacao ? `${i.saudacao}! ${/dia/.test(i.saudacao) ? "☀️ " : ""}` : "";
   let out: Outcome;
@@ -122,6 +205,7 @@ async function dispatch(i: Interpretation, c: Ctx): Promise<Outcome> {
 const HELP = `Sou seu assistente financeiro. Basta conversar comigo:
 
 💸 *Registrar*: “gastei 87,50 no mercado”, “paguei 200 de gasolina ontem”, “comprei uma TV de 2.400 em 10 vezes”
+🧾 *Vários de uma vez*: “gastei 20 no mercado e 50 de combustível”
 💰 *Receitas*: “recebi 1.000 de salário”, “entrou 3 mil de vendas”
 🔁 *Transferir*: “transferi 500 do Nubank para a Poupança”
 📊 *Consultar*: “quanto gastei este mês?”, “quanto gastei com alimentação?”, “qual minha maior despesa?”, “quanto tenho na conta?”
