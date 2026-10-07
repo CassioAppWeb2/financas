@@ -1,6 +1,7 @@
 // Assistente Financeiro — aplicativo Web/PWA (sem build, sem dependências).
 import * as api from "./api.js";
 import { brl, incomeExpenseChart, lineChart, categoryBars } from "./charts.js";
+import * as F2 from "./fase2.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -8,6 +9,7 @@ const root = $("#root");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const MESES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
 const TIPOS = { despesa: "Despesa", receita: "Receita", transferencia: "Transferência", investimento: "Investimento", resgate: "Resgate" };
+const TIPO_LABEL = { ...TIPOS, pagamento_fatura: "Pagamento de fatura" };
 const ACC_TYPES = { corrente: "Conta corrente", digital: "Conta digital", poupanca: "Poupança", dinheiro: "Dinheiro", investimento: "Investimentos", outro: "Outro" };
 
 const state = { boot: null, month: null, membro: "" };
@@ -87,11 +89,11 @@ const NAV = [
   { href: "#/assistente", ico: "💬", label: "Assistente", short: "Assistente" },
   { href: "#/lancamentos", ico: "💰", label: "Lançamentos", short: "Lançamentos" },
   { href: "#/contas", ico: "🏦", label: "Contas", short: "Contas" },
-  { href: "#/em-breve/cartoes", ico: "💳", label: "Cartões", soon: true },
-  { href: "#/em-breve/relatorios", ico: "📊", label: "Relatórios", soon: true },
-  { href: "#/em-breve/metas", ico: "🎯", label: "Metas", soon: true },
-  { href: "#/em-breve/orcamentos", ico: "💵", label: "Orçamentos", soon: true },
-  { href: "#/em-breve/recorrencias", ico: "🔄", label: "Recorrências", soon: true },
+  { href: "#/cartoes", ico: "💳", label: "Cartões" },
+  { href: "#/relatorios", ico: "📊", label: "Relatórios" },
+  { href: "#/metas", ico: "🎯", label: "Metas" },
+  { href: "#/orcamentos", ico: "💵", label: "Orçamentos" },
+  { href: "#/fixas", ico: "🔄", label: "Contas fixas" },
   { href: "#/categorias", ico: "🏷️", label: "Categorias" },
   { href: "#/configuracoes", ico: "⚙️", label: "Configurações" },
 ];
@@ -103,11 +105,11 @@ function shell(route) {
   <div class="app">
     <nav class="sidebar" aria-label="Menu">
       <div class="brand"><img class="brand-mark" src="icons/icon-192.png" alt="">Assistente Financeiro</div>
-      ${NAV.map((n) => `<a class="nav-link ${active(n.href)}" href="${n.href}"><span class="ico">${n.ico}</span>${n.label}${n.soon ? '<span class="badge-soon">em breve</span>' : ""}</a>`).join("")}
+      ${NAV.map((n) => `<a class="nav-link ${active(n.href)}" href="${n.href}"><span class="ico">${n.ico}</span>${n.label}</a>`).join("")}
     </nav>
     <main class="main" id="page"></main>
     <nav class="bottom-nav" aria-label="Menu">
-      ${BOTTOM.map((n) => `<a class="${n.href === "#/mais" ? (["mais", "categorias", "configuracoes", "em-breve"].some((r) => route.startsWith(r)) ? "active" : "") : active(n.href)}" href="${n.href}"><span class="ico">${n.ico}</span>${n.short}</a>`).join("")}
+      ${BOTTOM.map((n) => `<a class="${n.href === "#/mais" ? (["mais", "categorias", "configuracoes", "cartoes", "relatorios", "metas", "orcamentos", "fixas"].some((r) => route.startsWith(r)) ? "active" : "") : active(n.href)}" href="${n.href}"><span class="ico">${n.ico}</span>${n.short}</a>`).join("")}
     </nav>
   </div>`;
   return $("#page");
@@ -130,8 +132,13 @@ async function router(opts) {
     else if (route.startsWith("contas")) await accounts(page);
     else if (route.startsWith("categorias")) await categories(page);
     else if (route.startsWith("configuracoes")) await settings(page);
+    else if (route.startsWith("cartoes")) await F2.cardsView(page);
+    else if (route.startsWith("relatorios")) await F2.reportsView(page);
+    else if (route.startsWith("metas")) await F2.goalsView(page);
+    else if (route.startsWith("orcamentos")) await F2.budgetsView(page);
+    else if (route.startsWith("fixas")) await F2.recurringView(page);
     else if (route.startsWith("mais")) more(page);
-    else if (route.startsWith("em-breve")) soon(page, route.split("/")[1]);
+    else if (route.startsWith("em-breve")) location.hash = "#/" + ({ recorrencias: "fixas" }[route.split("/")[1]] || route.split("/")[1] || "");
     else location.hash = "#/";
     if (silent && !route.startsWith("assistente")) { window.scrollTo(0, y); page.scrollTop = py; }
   } catch (e) {
@@ -235,12 +242,14 @@ async function dashboard(page) {
   const nome = state.boot.perfil?.nome;
   page.innerHTML = `
     <div class="page-head"><h1>${current ? `Olá${nome ? `, ${esc(nome)}` : ""} 👋` : "Dashboard"}</h1><div class="row">${memberSeg(() => dashboard(page))}<span id="mnav"></span></div></div>
+    ${current ? F2.alertsHtml(d.alertas) : ""}
     <div class="grid kpis">
       <div class="card kpi hero"><div class="label">Resultado do mês</div><div class="value num">${brl(resultado)}</div><div class="hint">receitas − despesas ${current ? "até hoje" : ""}</div></div>
       <div class="card kpi"><div class="label">Receitas</div><div class="value num income">${brl(d.receitas_cents)}</div>${d.receitas_previstas_cents ? `<div class="hint">+ ${brl(d.receitas_previstas_cents)} previstas</div>` : ""}</div>
       <div class="card kpi"><div class="label">Despesas</div><div class="value num expense">${brl(d.despesas_cents)}</div></div>
       <div class="card kpi"><div class="label">Saldo em contas</div><div class="value num">${brl(d.saldo_contas_cents)}</div><div class="hint">hoje</div></div>
-      <div class="card kpi"><div class="label">Compromissos futuros</div><div class="value num">${brl(d.compromissos_futuros_cents)}</div><div class="hint">despesas lançadas p/ depois de hoje</div></div>
+      <div class="card kpi"><div class="label">Compromissos futuros</div><div class="value num">${brl(d.compromissos_futuros_cents)}</div><div class="hint">contas a pagar e faturas até o fim do mês</div></div>
+      ${d.faturas_mes_cents ? `<div class="card kpi"><div class="label">Faturas do mês</div><div class="value num">${brl(d.faturas_mes_cents)}</div><div class="hint"><a href="#/cartoes">ver cartões →</a></div></div>` : ""}
       ${current ? `<div class="card kpi"><div class="label">Saldo projetado</div><div class="value num">${brl(projetado)}</div><div class="hint">estimativa p/ fim do mês</div></div>` : ""}
       ${d.investimentos_cents ? `<div class="card kpi"><div class="label">Investimentos</div><div class="value num">${brl(d.investimentos_cents)}</div><div class="hint">aportes − resgates</div></div>` : ""}
     </div>
@@ -252,6 +261,9 @@ async function dashboard(page) {
         <div class="item"><div class="emoji">${x.membro_id === null ? "👨‍👩‍👧" : "👤"}</div>
         <div class="body"><div class="title">${x.membro_id === meId() ? "Você" : esc(x.membro)}</div><div class="sub">${x.membro_id === null ? "gastos compartilhados" : "individual"}</div></div>
         <div class="amount num expense">${brl(x.total_cents)}</div></div>`).join("") || `<div class="empty">Nenhuma despesa neste mês.</div>`}</div></div>` : ""}
+      ${(d.por_cartao || []).length ? `<div class="card"><h2>Gastos no cartão</h2><div class="list">${d.por_cartao.map((k) => `
+        <div class="item"><div class="emoji" style="color:${esc(k.cor || "inherit")}">💳</div><div class="body"><div class="title">${esc(k.cartao)}</div><div class="sub">compras em ${monthTitle(d.mes)}</div></div>
+        <div class="amount num expense">${brl(k.total_cents)}</div></div>`).join("")}</div></div>` : ""}
       <div class="card"><h2>Saldo por conta</h2><div class="list">${(d.por_conta || []).filter((a) => a.status === "ativa").map((a) => `
         <div class="item"><div class="emoji">${a.tipo === "dinheiro" ? "💵" : a.tipo === "poupanca" ? "🐷" : a.tipo === "investimento" ? "📈" : "🏦"}</div>
         <div class="body"><div class="title">${esc(a.nome)}</div><div class="sub">${esc(ACC_TYPES[a.tipo] || a.tipo)}${a.instituicao ? " · " + esc(a.instituicao) : ""}</div></div>
@@ -272,11 +284,14 @@ async function dashboard(page) {
 function txItem(t) {
   const sign = t.tipo === "receita" || t.tipo === "resgate" ? "+" : t.tipo === "transferencia" ? "" : "−";
   const cls = t.tipo === "receita" || t.tipo === "resgate" ? "income" : t.tipo === "despesa" ? "expense" : "";
+  const onde = t.cartao ? `💳 ${esc(t.cartao)}` : esc(t.conta);
   const sub = t.tipo === "transferencia" ? `${esc(t.conta)} → ${esc(t.conta_destino)}` :
-    [family() && esc(memberLabel(t)), t.categoria && `${esc(t.categoria)}${t.subcategoria ? " › " + esc(t.subcategoria) : ""}`, esc(t.conta), dateBR(t.data)].filter(Boolean).join(" · ");
-  const icon = t.tipo === "transferencia" ? "🔁" : t.tipo === "investimento" ? "📈" : t.tipo === "resgate" ? "📥" : t.icone || "•";
+    t.tipo === "pagamento_fatura" ? `${esc(t.conta)} → fatura ${esc(t.cartao)} · ${dateBR(t.data)}` :
+    [family() && esc(memberLabel(t)), t.categoria && `${esc(t.categoria)}${t.subcategoria ? " › " + esc(t.subcategoria) : ""}`, onde, dateBR(t.data)].filter(Boolean).join(" · ");
+  const icon = t.tipo === "transferencia" ? "🔁" : t.tipo === "investimento" ? "📈" : t.tipo === "resgate" ? "📥" : t.tipo === "pagamento_fatura" ? "💳" : t.icone || "•";
+  const prev = t.data > todayISO() ? ' <span class="tag">previsto</span>' : "";
   return `<div class="item click" data-id="${t.id}"><div class="emoji">${icon}</div>
-    <div class="body"><div class="title">${esc(t.descricao)} ${t.origem === "whatsapp" ? '<span class="tag wa">WhatsApp</span>' : t.origem === "telegram" ? '<span class="tag tg">Telegram</span>' : ""}</div><div class="sub">${sub}</div></div>
+    <div class="body"><div class="title">${esc(t.descricao)}${prev} ${t.origem === "whatsapp" ? '<span class="tag wa">WhatsApp</span>' : t.origem === "telegram" ? '<span class="tag tg">Telegram</span>' : t.origem === "recorrencia" ? '<span class="tag">fixa</span>' : t.origem === "importacao" ? '<span class="tag">importado</span>' : ""}</div><div class="sub">${sub}</div></div>
     <div class="amount num ${cls}">${sign} ${brl(Math.abs(t.valor_cents))}</div></div>`;
 }
 function bindTxClicks(host, list, after) {
@@ -308,7 +323,7 @@ function txForm(t, after) {
         <div class="field"><label>Subcategoria</label><select class="input" name="subcategoria_id"></select></div>
       </div>
       <div class="row">
-        <div class="field"><label class="lbl-conta">Conta</label><select class="input" name="conta_id">${opts(contas.map((a) => [a.id, a.nome]), t?.conta_id || contas.find((a) => a.padrao)?.id)}</select></div>
+        <div class="field"><label class="lbl-conta">Conta</label><select class="input" name="conta_id" ${edit && t.cartao_id ? "disabled" : ""}>${opts([...contas.map((a) => [a.id, a.nome]), ...(edit && !t.cartao_id ? [] : (b.cartoes || []).map((k) => ["k:" + k.id, "💳 " + k.nome]))], t?.cartao_id ? "k:" + t.cartao_id : t?.conta_id || contas.find((a) => a.padrao)?.id)}</select></div>
         <div class="field dest-row"><label>Conta de destino</label><select class="input" name="conta_destino_id" ${edit ? "disabled" : ""}>${opts(contas.map((a) => [a.id, a.nome]), t?.conta_destino_id || contas.find((a) => !a.padrao)?.id)}</select></div>
         ${edit ? "" : `<div class="field parc-row"><label>Parcelas</label><input class="input num" name="parcelas" type="number" min="1" max="72" value="1"></div>`}
       </div>
@@ -316,7 +331,9 @@ function txForm(t, after) {
         ${b.familia.membros.map((m) => `<option value="${m.id}" ${(edit ? t.membro_id === m.id : m.eu) ? "selected" : ""}>${m.eu ? "Meu" : "De " + esc(m.nome)}</option>`).join("")}
         <option value="familia" ${edit && t.membro_id === null ? "selected" : ""}>Família (compartilhado)</option></select></div>` : ""}
       ${edit && t.parcelas > 1 ? `<p class="small muted">Compra parcelada (${t.parcela}/${t.parcelas}): a categoria e a descrição mudam em todas as parcelas.</p>` : ""}
-      ${edit && t.origem !== "app_form" ? `<p class="small muted">Registrado pelo ${t.origem === "whatsapp" ? "WhatsApp" : "assistente"}.</p>` : ""}
+      ${edit && t.cartao_id ? `<p class="small muted">Compra no cartão ${esc(t.cartao)} — fatura de ${dateBR(t.fatura_vencimento)}.</p>` : ""}
+      ${edit && !["app_form", "importacao", "recorrencia"].includes(t.origem) ? `<p class="small muted">Registrado pelo ${t.origem === "whatsapp" ? "WhatsApp" : t.origem === "telegram" ? "Telegram" : "assistente"}.</p>` : ""}
+      ${edit && t.origem === "recorrencia" ? `<p class="small muted">Lançado automaticamente por uma <a href="#/fixas">conta fixa</a>.</p>` : ""}
       <p class="small expense hidden" id="txErr"></p>
       <div class="modal-actions">
         ${edit ? `<button type="button" class="btn danger" id="txDel">Excluir</button><span class="spacer"></span>` : ""}
@@ -333,7 +350,9 @@ function txForm(t, after) {
       $(".dest-row", m).classList.toggle("hidden", tp !== "transferencia");
       $(".parc-row", m)?.classList.toggle("hidden", !isCat);
       $(".memb-row", m)?.classList.toggle("hidden", !isCat);
-      $(".lbl-conta", m).textContent = tp === "transferencia" ? "Conta de origem" : "Conta";
+      $(".lbl-conta", m).textContent = tp === "transferencia" ? "Conta de origem" : tp === "despesa" ? "Pagar com" : "Conta";
+      $$("option[value^='k:']", f.conta_id).forEach((o) => { o.hidden = o.disabled = tp !== "despesa"; });
+      if (f.conta_id.value.startsWith("k:") && tp !== "despesa") f.conta_id.value = contas.find((a) => a.padrao)?.id || contas[0]?.id;
       if (!isCat) return;
       const cats = b.categorias.filter((c) => c.tipo === tp);
       f.categoria_id.innerHTML = `<option value="">Escolha…</option>` + opts(cats.map((c) => [c.id, `${c.icone || ""} ${c.nome}`]), t?.categoria_id);
@@ -356,7 +375,8 @@ function txForm(t, after) {
       const err = $("#txErr", m);
       err.classList.add("hidden");
       const tp = f.tipo.value;
-      const p = { descricao: f.descricao.value.trim(), conta_id: f.conta_id.value };
+      const p = { descricao: f.descricao.value.trim() };
+      if (!(edit && t.cartao_id)) { if (f.conta_id.value.startsWith("k:")) p.cartao_id = f.conta_id.value.slice(2); else p.conta_id = f.conta_id.value; }
       if (edit) p.id = t.id; else p.tipo = tp;
       if (!(edit && t.parcelas > 1)) {
         const v = parseMoney(f.valor.value);
@@ -380,7 +400,7 @@ function txForm(t, after) {
           return;
         }
         if (r.status !== "created" && r.status !== "updated") throw new Error("Não foi possível salvar. Confira os dados.");
-        close(); toast(edit ? "Lançamento atualizado ✅" : "Lançamento registrado ✅"); state.boot = null; after?.();
+        close(); toast(edit ? "Lançamento atualizado ✅" : r.lancamento?.fatura_vencimento ? `Registrado ✅ Entra na fatura de ${dateBR(r.lancamento.fatura_vencimento)}` : "Lançamento registrado ✅"); state.boot = null; after?.();
       } catch (ex) { err.textContent = ex.message; err.classList.remove("hidden"); }
     };
   });
@@ -391,7 +411,7 @@ async function transactions(page) {
   const filt = { tipo: "", categoria_id: "", busca: "" };
   const memberSel = family() ? `<select class="input" id="fMemb" style="max-width:190px"><option value="">Todas as pessoas</option>${state.boot.familia.membros.map((m) => `<option value="${m.id}">${m.eu ? "Eu" : esc(m.nome)}</option>`).join("")}<option value="familia">Compartilhado</option></select>` : "";
   page.innerHTML = `
-    <div class="page-head"><h1>Lançamentos</h1><div class="row"><span id="mnav"></span><button class="btn" id="csv">⬇️ CSV</button></div></div>
+    <div class="page-head"><h1>Lançamentos</h1><div class="row"><span id="mnav"></span><button class="btn" id="imp">⬆️ Importar</button><button class="btn" id="csv">⬇️ CSV</button></div></div>
     <div class="card" style="margin-bottom:14px">
       <div class="row">
         <div class="seg" id="segTipo"><button data-v="" class="on">Todos</button><button data-v="despesa">Despesas</button><button data-v="receita">Receitas</button></div>
@@ -431,9 +451,10 @@ async function transactions(page) {
   let tm; $("#fBusca").oninput = (e) => { clearTimeout(tm); tm = setTimeout(() => { filt.busca = e.target.value; load(); }, 300); };
   bindTxClicks($("#txList"), { find: (fn) => data.find(fn) }, async () => { await loadBoot(true); load(); });
   $("#fab").onclick = () => txForm(null, async () => { await loadBoot(true); load(); });
+  $("#imp").onclick = () => F2.importDialog({}, async () => { await loadBoot(true); load(); });
   $("#csv").onclick = () => {
-    const rows = [["Data", "Tipo", "Descrição", "Categoria", "Subcategoria", "Conta", "De quem", "Valor"]].concat(
-      data.map((t) => [dateBR(t.data), TIPOS[t.tipo], t.descricao, t.categoria || "", t.subcategoria || "", t.conta || "", t.membro || "", (t.valor_cents / 100).toFixed(2).replace(".", ",")]));
+    const rows = [["Data", "Tipo", "Descrição", "Categoria", "Subcategoria", "Conta", "Cartão", "De quem", "Valor"]].concat(
+      data.map((t) => [dateBR(t.data), TIPO_LABEL[t.tipo] || t.tipo, t.descricao, t.categoria || "", t.subcategoria || "", t.conta || "", t.cartao || "", t.membro || "", (t.valor_cents / 100).toFixed(2).replace(".", ",")]));
     const csv = "﻿" + rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
@@ -444,7 +465,7 @@ async function transactions(page) {
 }
 
 // ---------------------------------------------------------------- ASSISTENTE (chat)
-const SUGGESTIONS = ["Quanto gastei este mês?", "Quanto posso gastar até o fim do mês?", "Como estão minhas finanças?", "Qual minha maior despesa?", "Ajuda"];
+const SUGGESTIONS = ["Quanto gastei este mês?", "Quanto posso gastar até o fim do mês?", "Quanto está a fatura?", "Como estão minhas metas?", "Tenho algum alerta?", "Ajuda"];
 
 function bubble(m) {
   const time = m.created_at ? new Date(m.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
@@ -454,9 +475,9 @@ function bubble(m) {
 function cardHtml(c) {
   if (c.type === "transaction" && c.data) {
     const t = c.data;
-    return `<div class="msg-card"><div class="ct">${esc(TIPOS[t.tipo] || "Lançamento")}</div>
+    return `<div class="msg-card"><div class="ct">${esc(TIPO_LABEL[t.tipo] || "Lançamento")}</div>
       <div class="kv"><span>${esc(String(t.descricao).replace(/ \(\d+\/\d+\)$/, ""))}${t.parcelas > 1 ? ` <span class="muted small">em ${t.parcelas}x</span>` : ""}</span><b class="num">${brl(t.valor_total_cents ?? t.valor_cents)}</b></div>
-      <div class="kv small muted"><span>${esc([t.categoria, t.subcategoria].filter(Boolean).join(" › ") || t.conta || "")}</span><span>${dateBR(t.data)}</span></div></div>`;
+      <div class="kv small muted"><span>${esc([t.categoria, t.subcategoria].filter(Boolean).join(" › ") || t.conta || "")}${t.cartao ? ` · 💳 ${esc(t.cartao)}` : ""}</span><span>${dateBR(t.data)}</span></div></div>`;
   }
   if ((c.type === "summary" || c.type === "list") && c.items) {
     return `<div class="msg-card">${c.title ? `<div class="ct">${esc(c.title)}</div>` : ""}${c.items.map((i) => `<div class="kv"><span>${esc(i.label)}${i.hint ? ` <span class="muted small">(${esc(i.hint)})</span>` : ""}</span><b class="num">${brl(i.value_cents)}</b></div>`).join("")}</div>`;
@@ -497,7 +518,7 @@ async function chat(page) {
       const r = await api.ask({ text, type, ...extra });
       $("#typing")?.remove();
       box.insertAdjacentHTML("beforeend", bubble({ role: "assistant", content: r.reply, cards: r.cards, created_at: new Date().toISOString() }));
-      if (/^CREATE|EDIT|DELETE|CORRECT/.test(r.intent || "") || /Registrei|Apaguei|Pronto/.test(r.reply)) state.boot = null;
+      if (/^CREATE|EDIT|DELETE|CORRECT|PAY|GOAL|CANCEL/.test(r.intent || "") || /Registrei|Apaguei|Pronto|criada|Guardei|Tirei/.test(r.reply)) state.boot = null;
     } catch (e) {
       $("#typing")?.remove();
       box.insertAdjacentHTML("beforeend", bubble({ role: "assistant", content: `⚠️ ${e.message}` }));
@@ -561,7 +582,7 @@ async function accounts(page) {
   const b = await loadBoot(true);
   const list = b.contas.contas;
   page.innerHTML = `
-    <div class="page-head"><h1>Contas</h1><button class="btn primary" id="newAcc">+ Nova conta</button></div>
+    <div class="page-head"><h1>Contas</h1><div class="row"><button class="btn" id="impAcc">⬆️ Importar extrato</button><button class="btn primary" id="newAcc">+ Nova conta</button></div></div>
     <div class="card kpi" style="margin-bottom:14px"><div class="label">Saldo total (contas ativas)</div><div class="value num">${brl(b.contas.total_cents)}</div><div class="hint">Calculado pelos lançamentos até hoje</div></div>
     <div class="card"><div class="list" id="accList">${list.map((a) => `
       <div class="item click" data-id="${a.id}" style="${a.status === "arquivada" ? "opacity:.55" : ""}">
@@ -572,6 +593,7 @@ async function accounts(page) {
     <p class="small muted" style="margin-top:12px">A conta <b>padrão</b> é usada quando você não diz onde foi o gasto. Para usar outra, diga no chat: “paguei 50 no mercado com o Nubank”.</p>`;
   const reload = () => accounts(page);
   $("#newAcc").onclick = () => accForm(null, reload);
+  $("#impAcc").onclick = () => F2.importDialog({}, reload);
   $("#accList").onclick = (e) => { const it = e.target.closest("[data-id]"); if (it) accForm(list.find((a) => a.id === it.dataset.id), reload); };
 }
 
@@ -774,25 +796,16 @@ async function settings(page) {
   $("#out").onclick = async () => { await api.signOut(); state.boot = null; state.month = null; state.membro = ""; location.hash = "#/"; router(); };
 }
 
-// ---------------------------------------------------------------- MAIS / EM BREVE
+// ---------------------------------------------------------------- MAIS
 function more(page) {
   page.innerHTML = `<div class="page-head"><h1>Mais</h1></div><div class="card"><div class="list">
-    ${NAV.slice(4).map((n) => `<a class="item click" href="${n.href}" style="text-decoration:none;color:inherit"><div class="emoji">${n.ico}</div><div class="body"><div class="title">${n.label}</div></div>${n.soon ? '<span class="badge-soon">em breve</span>' : "›"}</a>`).join("")}
+    ${NAV.slice(4).map((n) => `<a class="item click" href="${n.href}" style="text-decoration:none;color:inherit"><div class="emoji">${n.ico}</div><div class="body"><div class="title">${n.label}</div></div>›</a>`).join("")}
   </div></div>`;
-}
-const SOON = {
-  cartoes: ["💳", "Cartões", "Cadastro de cartões, faturas, fechamento e vencimento."],
-  relatorios: ["📊", "Relatórios", "Relatórios mensais e anuais com exportação em PDF, CSV e Excel. (A exportação CSV já está em Lançamentos.)"],
-  metas: ["🎯", "Metas", "Metas como “juntar R$ 20.000 até dezembro”, com valor por mês e previsão. A meta de economia mensal já pode ser definida em Configurações."],
-  orcamentos: ["💵", "Orçamentos", "Limites por categoria com alertas quando chegar perto do limite."],
-  recorrencias: ["🔄", "Recorrências", "Lançamentos automáticos como aluguel, internet e salário."],
-};
-function soon(page, key) {
-  const [ico, title, text] = SOON[key] || ["🚧", "Em breve", ""];
-  page.innerHTML = `<div class="page-head"><h1>${title}</h1></div><div class="card empty"><div class="big">${ico}</div><p><b>Chega na próxima fase.</b></p><p class="muted">${esc(text)}</p></div>`;
 }
 
 // ---------------------------------------------------------------- início
+F2.init({ api, state, loadBoot, modal, toast, confirmBox, esc, brl, dateBR, parseMoney, moneyInput, monthTitle, shiftMonth, monthNav, txItem, bindTxClicks,
+  family, memberSeg, memberLabel, todayISO, MESES, TIPOS, setRefresh: (fn) => { viewRefresh = fn; } });
 api.onAuth((s) => { if (!s) { state.boot = null; } });
 window.addEventListener("hashchange", router);
 router();
