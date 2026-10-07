@@ -142,3 +142,9 @@ O conteúdo de `web/` fica no ramo `gh-pages`; `web/js/config.js` já contém a 
 O assistente diferencia **fato** (dado do banco), **interpretação** (o que entendeu da mensagem — e pergunta
 quando falta algo) e **estimativa** (projeções, sempre marcadas como “estimativa”). A IA nunca grava no banco:
 sua resposta é validada (valor só é aceito se aparece na mensagem; categoria só se existe no cadastro).
+
+### Publicar a função `assistant` (sem a CLI)
+O código compartilhado (`supabase/functions/_shared`) é publicado a partir do GitHub: o `index.ts` enviado ao Supabase
+importa os módulos por `https://raw.githubusercontent.com/CassioAppWeb2/financas/<commit>/supabase/functions/_shared/...`,
+fixados num commit (nada muda sozinho). Para atualizar: faça push em `main`, troque o `<commit>` no entrypoint e publique de novo.
+Com a CLI, `supabase functions deploy assistant --no-verify-jwt` continua funcionando normalmente com o `index.ts` do repositório.
