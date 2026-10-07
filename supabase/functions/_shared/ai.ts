@@ -20,7 +20,7 @@ const GEMINI_URL = (model: string) => `https://generativelanguage.googleapis.com
 
 // Modelos tentados em ordem: o Google aposenta modelos com frequência,
 // então se um responder 404 (inexistente) ou 429/403 (sem cota grátis), tenta o próximo.
-const GEMINI_FALLBACK = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-2.5-flash"];
+const GEMINI_FALLBACK = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-flash-latest", "gemini-3.5-flash", "gemini-2.5-flash"];
 let geminiWorking: string | undefined;
 
 export async function geminiCall(cfg: AiConfig, body: unknown, timeoutMs: number): Promise<{ data: any; model: string }> {
@@ -28,16 +28,25 @@ export async function geminiCall(cfg: AiConfig, body: unknown, timeoutMs: number
   const list = [...new Set([geminiWorking, cfg.geminiModel, ...GEMINI_FALLBACK].filter(Boolean) as string[])];
   let last = "";
   for (const model of list) {
-    const res = await f(GEMINI_URL(model), {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": cfg.geminiKey! },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    let res: Response;
+    const t0 = Date.now();
+    try {
+      res = await f(GEMINI_URL(model), {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": cfg.geminiKey! },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (e) {
+      last = `Gemini sem resposta em ${Math.round((Date.now() - t0) / 1000)}s (${model}): ${(e as Error).message}`;
+      console.warn(last);
+      if (geminiWorking === model) geminiWorking = undefined;
+      continue;
+    }
     if (res.ok) { geminiWorking = model; return { data: await res.json(), model }; }
     last = `Gemini ${res.status} (${model})`;
-    console.warn(last);
-    if (![403, 404, 429].includes(res.status)) break;
+    console.warn(last, (await res.text()).slice(0, 300));
+    if (![403, 404, 429, 500, 503].includes(res.status)) break;
     if (geminiWorking === model) geminiWorking = undefined;
   }
   throw new Error(last || "Gemini indisponível");
@@ -176,6 +185,6 @@ export async function transcribeAudio(bytes: Uint8Array, mime: string, cfg: AiCo
       { inlineData: { mimeType: mime.split(";")[0], data: toBase64(bytes) } },
     ] }],
     generationConfig: { temperature: 0 },
-  }, 30000);
+  }, 25000);
   return { text: String(d?.candidates?.[0]?.content?.parts?.[0]?.text ?? "").trim(), provider: `gemini:${model}` };
 }
