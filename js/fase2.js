@@ -57,7 +57,7 @@ export async function cardsView(page) {
       const atual = k.fatura_atual, ant = k.fatura_anterior;
       const pend = ant.restante_cents > 0 && ant.situacao !== "paga";
       return `<div class="card cc" data-id="${k.id}">
-        <div class="cc-face" style="--cc:${C.esc(k.cor || "#1f4fa3")}"><div class="cc-name">${C.esc(k.nome)}</div><div class="cc-days">fecha dia ${k.fechamento} · vence dia ${k.vencimento}</div></div>
+        <div class="cc-face" style="--cc:${C.esc(k.cor || "#1f4fa3")}"><div class="cc-name">${C.esc(k.nome)}</div><div class="cc-days">fecha dia ${k.fechamento} · vence dia ${k.vencimento}${C.family() ? ` · ${k.membro_id === null ? "família" : k.membro_id === C.state.boot.perfil.id ? "meu" : C.esc((k.membro || "").split(" ")[0])}` : ""}</div></div>
         <div class="kv"><span>Fatura atual ${sitTag(atual.situacao)}</span><b class="num">${C.brl(atual.total_cents)}</b></div>
         <div class="small muted">Fecha ${C.dateBR(atual.fechamento)} · vence ${C.dateBR(atual.vencimento)}</div>
         ${pend ? `<div class="notice" style="margin-top:10px">Fatura de ${C.dateBR(ant.vencimento)}: <b>${C.brl(ant.restante_cents)}</b> a pagar ${sitTag(ant.situacao)}</div>` : ""}
@@ -99,6 +99,10 @@ function cardForm(k, after) {
         <div class="field"><label>Limite (R$) <span class="muted">opcional</span></label><input class="input num" name="limite" inputmode="decimal" value="${C.moneyInput(k?.limite_cents)}" placeholder="0,00"></div>
         <div class="field"><label>Pagar a fatura pela conta</label><select class="input" name="conta">${opts(contas.map((a) => [a.id, a.nome]), k?.conta_pagamento_id || contas.find((a) => a.padrao)?.id)}</select></div>
       </div>
+      ${C.family() ? `<div class="field"><label>De quem é o cartão?</label><select class="input" name="membro">
+        ${C.state.boot.familia.membros.map((mm) => `<option value="${mm.id}" ${(k ? k.membro_id === mm.id : mm.eu) ? "selected" : ""}>${mm.eu ? "Meu" : "De " + C.esc(mm.nome)}</option>`).join("")}
+        <option value="familia" ${k && k.membro_id === null ? "selected" : ""}>Da família</option></select>
+        <span class="small muted">Quem paga a fatura. Compras divididas pagas com este cartão viram acerto com o dono.</span></div>` : ""}
       <div class="field"><label>Cor</label><div class="colors">${CARD_COLORS.map((c) => `<label><input type="radio" name="cor" value="${c}" ${c === (k?.cor || CARD_COLORS[4]) ? "checked" : ""}><i style="background:${c}"></i></label>`).join("")}</div></div>
       <p class="small muted">O fechamento é o dia em que a fatura fecha (as compras desse dia em diante vão para a próxima).</p>
       <p class="small expense hidden form-err"></p>
@@ -119,7 +123,7 @@ function cardForm(k, after) {
       const lim = f.limite.value.trim() ? C.parseMoney(f.limite.value) : null;
       if (lim !== null && !(lim >= 0)) return err(m, "Limite inválido.");
       try {
-        await C.api.rpc("app_save_card", { id: k?.id, nome: f.nome.value.trim(), fechamento: fe, vencimento: ve, limite: lim ?? "", cor: f.cor.value, conta_pagamento_id: f.conta.value });
+        await C.api.rpc("app_save_card", { id: k?.id, nome: f.nome.value.trim(), fechamento: fe, vencimento: ve, limite: lim ?? "", cor: f.cor.value, conta_pagamento_id: f.conta.value, ...(f.membro ? { membro: f.membro.value } : {}) });
         close(); C.state.boot = null; C.toast("Cartão salvo ✅"); after();
       } catch (x) { err(m, x.message); }
     };
@@ -684,7 +688,175 @@ function importPreview(prev, itens, dest, destLabel, after, totalDoc) {
 // Painel: alertas e cartões no dashboard
 // =====================================================================
 export function alertsHtml(alertas) {
-  if (!alertas?.length) return "";
+  alertas = (alertas || []).filter((a) => a.tipo !== "acerto");   // os acertos têm um quadro próprio
+  if (!alertas.length) return "";
   const cls = { alto: "bad", medio: "warn", bom: "ok" };
   return `<div class="card alerts" style="margin-bottom:14px"><h2>🔔 Alertas</h2>${alertas.map((a) => `<div class="alert ${cls[a.nivel] || ""}"><span>${a.icone}</span><span>${C.esc(a.texto)}</span></div>`).join("")}</div>`;
+}
+
+// =====================================================================
+// Painéis do Início: ao tocar, mostra o que compõe o valor
+// =====================================================================
+const KPI_TITLES = { resultado: "Resultado do mês", receitas: "Receitas", despesas: "Despesas", saldo: "Saldo em contas", compromissos: "Compromissos futuros",
+  faturas: "Faturas do mês", projetado: "Saldo projetado", investimentos: "Investimentos", acertos: "Acertos do mês" };
+
+export async function kpiDialog(k, d, extra, after) {
+  await C.loadBoot();
+  const base = { mes: C.state.month, membro_id: C.state.membro };
+  const sum = (arr) => arr.reduce((t, x) => t + Number(x.valor_cents || 0), 0);
+  const txList = (arr, empty) => arr.length ? `<div class="list">${arr.map(C.txItem).join("")}</div>` : `<div class="empty">${empty}</div>`;
+  const fatList = (arr) => arr.map((f) => `<div class="item click" data-card="${f.cartao_id}" data-due="${f.vencimento}"><div class="emoji" style="color:${C.esc(f.cor || "inherit")}">💳</div>
+    <div class="body"><div class="title">Fatura ${C.esc(f.cartao)}</div><div class="sub">vence ${C.dateBR(f.vencimento)} · ${f.situacao === "fechada" ? "fechada" : f.situacao === "vencida" ? "vencida" : "aberta"}${f.pago_cents ? ` · pago ${C.brl(f.pago_cents)}` : ""}</div></div>
+    <div class="amount num">${C.brl(f.restante_cents)}</div></div>`).join("");
+  const row = (l, v, cls = "") => `<div class="kv"><span>${l}</span><b class="num ${cls}">${C.brl(v)}</b></div>`;
+  let html = "", txs = [], m;
+  const close = C.modal(`<h2>${KPI_TITLES[k] || ""}</h2><div id="kd"><div class="empty">Carregando…</div></div>
+    <div class="modal-actions"><button class="btn" id="kdc">Fechar</button></div>`, (mm, cl) => { m = mm; $("#kdc", mm).onclick = cl; });
+  m.querySelector(".modal").classList.add("wide");
+  try {
+    if (k === "resultado") {
+      const [r, dsp] = await Promise.all([C.api.rpc("app_kpi_detail", { ...base, painel: "receitas" }), C.api.rpc("app_kpi_detail", { ...base, painel: "despesas" })]);
+      txs = [...r.lancamentos, ...dsp.lancamentos];
+      html = `<div class="card" style="margin-bottom:12px">${row("Receitas", sum(r.lancamentos), "income")}${row("− Despesas", sum(dsp.lancamentos), "expense")}<hr style="border:0;border-top:1px solid var(--line)">${row("= Resultado", sum(r.lancamentos) - sum(dsp.lancamentos))}</div>
+        <h3 class="small">Receitas</h3>${txList(r.lancamentos, "Nenhuma receita até hoje.")}<h3 class="small" style="margin-top:14px">Despesas</h3>${txList(dsp.lancamentos, "Nenhuma despesa até hoje.")}`;
+    } else if (k === "receitas") {
+      const [r, prev] = await Promise.all([C.api.rpc("app_kpi_detail", { ...base, painel: "receitas" }), C.api.rpc("app_kpi_detail", { ...base, painel: "previstas" })]);
+      txs = [...r.lancamentos, ...prev.lancamentos];
+      html = txList(r.lancamentos, "Nenhuma receita até hoje.") + (prev.lancamentos.length ? `<h3 class="small" style="margin-top:14px">Previstas (ainda vão entrar) — ${C.brl(sum(prev.lancamentos))}</h3>${txList(prev.lancamentos, "")}` : "");
+    } else if (k === "despesas" || k === "investimentos") {
+      const r = await C.api.rpc("app_kpi_detail", { ...base, painel: k });
+      txs = r.lancamentos;
+      const byCat = new Map();
+      if (k === "despesas") for (const t of txs) byCat.set(t.categoria || "Outros", (byCat.get(t.categoria || "Outros") || 0) + t.valor_cents);
+      html = (byCat.size > 1 ? `<div class="card" style="margin-bottom:12px">${[...byCat.entries()].sort((a, b) => b[1] - a[1]).map(([c, v]) => row(C.esc(c), v)).join("")}</div>` : "") +
+        txList(txs, "Nada lançado até hoje.");
+    } else if (k === "saldo") {
+      const r = await C.api.rpc("app_kpi_detail", { ...base, painel: "saldo" });
+      html = `<div class="list">${(r.contas || []).filter((a) => a.status === "ativa").map((a) => `<div class="item"><div class="emoji">${a.tipo === "dinheiro" ? "💵" : a.tipo === "poupanca" ? "🐷" : a.tipo === "investimento" ? "📈" : "🏦"}</div>
+        <div class="body"><div class="title">${C.esc(a.nome)}</div><div class="sub">${C.family() ? (a.membro_id === null ? "Família" : C.esc(a.membro)) : ""}</div></div>
+        <div class="amount num ${a.saldo_cents < 0 ? "expense" : ""}">${C.brl(a.saldo_cents)}</div></div>`).join("") || `<div class="empty">Nenhuma conta ${extra.quem}. Cadastre em <a href="#/contas">Contas</a>.</div>`}</div>
+        <p class="small muted">Saldo inicial de cada conta + entradas − saídas até hoje. Compras no cartão só saem da conta quando a fatura é paga.</p>`;
+    } else if (k === "compromissos" || k === "faturas") {
+      const r = await C.api.rpc("app_kpi_detail", { ...base, painel: k });
+      txs = r.lancamentos;
+      html = (k === "compromissos" ? `<h3 class="small">Contas a pagar até o fim do mês — ${C.brl(sum(txs))}</h3>${txList(txs, "Nenhuma conta a pagar lançada.")}<h3 class="small" style="margin-top:14px">Faturas de cartão</h3>` : "") +
+        (r.faturas.length ? `<div class="list">${fatList(r.faturas)}</div>` : `<div class="empty">Nenhuma fatura a pagar até o fim do mês.</div>`);
+    } else if (k === "acertos") {
+      html = `<div id="kdDebts"></div>`;
+    } else if (k === "projetado") {
+      html = `<div class="card">${row("Saldo em contas hoje", Number(d.saldo_contas_cents))}${row("+ Receitas previstas", Number(d.receitas_previstas_cents), "income")}
+        ${row("− Compromissos (contas e faturas)", Number(d.compromissos_futuros_cents), "expense")}
+        ${extra.aPagar ? row("− Acertos a pagar", extra.aPagar, "expense") : ""}${extra.aReceber ? row("+ Acertos a receber", extra.aReceber, "income") : ""}
+        <hr style="border:0;border-top:1px solid var(--line)">${row("= Saldo projetado", extra.projetado)}</div>
+        <p class="small muted">Estimativa feita só com o que está lançado no app. Toque nos outros painéis para ver cada parte.</p>`;
+    }
+    $("#kd", m).innerHTML = html;
+    if (k === "acertos") debtsCard($("#kdDebts", m), () => { close(); after?.(); }, true);
+    C.bindTxClicks($("#kd", m), { find: (fn) => txs.find(fn) }, () => { close(); after?.(); });
+    $("#kd", m).addEventListener("click", (e) => {
+      const f = e.target.closest("[data-card]"); if (!f) return;
+      const card = (C.state.boot.cartoes || []).find((x) => x.id === f.dataset.card);
+      if (card) { close(); invoiceDialog(card, f.dataset.due, after); }
+    });
+  } catch (y) { $("#kd", m).innerHTML = `<div class="empty">${C.esc(y.message)}</div>`; }
+}
+
+// =====================================================================
+// Acertos da família (gastos divididos)
+// =====================================================================
+export async function debtsCard(host, after, inline = false) {
+  if (!host) return;
+  await C.loadBoot();
+  let d;
+  try { d = await C.api.rpc("app_debts"); } catch { return; }
+  if (!d.devo.length && !d.recebo.length) { host.innerHTML = inline ? `<div class="empty">Nenhum acerto pendente. 👍</div>` : ""; return; }
+  const first = (n) => C.esc(String(n || "").split(" ")[0]);
+  const block = (x, devo) => `<div class="acerto ${devo ? "bad" : "ok"}">
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div><b>${devo ? `Você deve ${C.brl(x.total_cents)} para ${first(x.pessoa)}` : `${first(x.pessoa)} deve ${C.brl(x.total_cents)} para você`}</b>
+      <div class="small muted">${x.itens.length} gasto(s) dividido(s) até ${C.dateBR(d.ate)}</div></div>
+      <div class="row"><button class="btn small primary" data-pay="${x.pessoa_id}" data-v="${x.total_cents}" data-devo="${devo ? 1 : 0}" data-nome="${C.esc(x.pessoa)}">${devo ? "Paguei" : "Recebi"}</button>
+      <button class="btn small" data-ok="${x.pessoa_id}">OK</button></div></div>
+    <details><summary class="small" style="cursor:pointer">Ver gastos</summary><div class="list">${x.itens.map((t) => `<div class="item"><div class="emoji">${t.icone || "•"}</div>
+      <div class="body"><div class="title">${C.esc(t.descricao)}</div><div class="sub">${C.dateBR(t.data)}${t.cartao ? ` · 💳 ${C.esc(t.cartao)}` : t.conta ? ` · ${C.esc(t.conta)}` : ""}</div></div>
+      <div class="amount num">${C.brl(t.valor_cents)}</div></div>`).join("")}</div></details></div>`;
+  host.innerHTML = `<div class="${inline ? "" : "card "}alerts" style="${inline ? "" : "margin-bottom:14px"}">${inline ? "" : "<h2>🤝 Acertos do mês</h2>"}
+    ${d.devo.map((x) => block(x, true)).join("")}${d.recebo.map((x) => block(x, false)).join("")}
+    ${d.futuro_cents ? `<p class="small muted">+ ${C.brl(d.futuro_cents)} de parcelas divididas nos próximos meses.</p>` : ""}</div>`;
+  host.onclick = async (e) => {
+    const pay = e.target.closest("[data-pay]"), ok = e.target.closest("[data-ok]");
+    if (ok) {
+      if (!(await C.confirmBox("Dispensar este acerto? Os gastos continuam lançados, só não fica nada a pagar (nenhum lançamento é feito).", "Dispensar"))) return;
+      try { await C.api.rpc("app_settle", { pessoa_id: ok.dataset.ok, acao: "dispensar" }); C.toast("Acerto dispensado"); after?.(); } catch (y) { C.toast(y.message); }
+    }
+    if (pay) settleDialog(pay.dataset.pay, Number(pay.dataset.v), pay.dataset.devo === "1", pay.dataset.nome, after);
+  };
+}
+
+async function settleDialog(pessoaId, valor, devo, nome, after) {
+  const b = await C.loadBoot(), me = b.perfil.id;
+  const contas = b.contas.contas.filter((a) => a.status === "ativa");
+  const debtor = devo ? me : pessoaId, creditor = devo ? pessoaId : me;
+  const accOpts = (owner) => {
+    const own = contas.filter((a) => a.membro_id === owner), rest = contas.filter((a) => a.membro_id !== owner);
+    return opts([...own, ...rest].map((a) => [a.id, `${a.nome}${a.membro_id === null ? " (família)" : a.membro_id !== owner ? ` (de ${(a.membro || "").split(" ")[0]})` : ""}`]), own[0]?.id);
+  };
+  const first = String(nome || "").split(" ")[0];
+  C.modal(`<h2>${devo ? `Pagar ${C.brl(valor)} para ${C.esc(first)}` : `Receber ${C.brl(valor)} de ${C.esc(first)}`}</h2>
+    <form id="sf" novalidate>
+      <div class="row">
+        <div class="field"><label>Data</label><input class="input" type="date" name="data" value="${C.todayISO()}"></div>
+        <div class="field"><label>Forma de pagamento</label><select class="input" name="forma">${opts([["pix", "Pix"], ["transferencia", "Transferência"], ["dinheiro", "Dinheiro"], ["outro", "Outro"]], "pix")}</select></div></div>
+      <div class="row">
+        <div class="field"><label>Saiu da conta (de quem pagou)</label><select class="input" name="origem">${accOpts(debtor)}</select></div>
+        <div class="field"><label>Entrou na conta (de quem recebeu)</label><select class="input" name="destino">${accOpts(creditor)}</select></div></div>
+      <p class="small muted">Lanço uma <b>transferência</b> entre as contas — não conta como despesa nova, porque cada um já tem a sua parte lançada.</p>
+      <p class="small expense hidden form-err"></p>
+      <div class="modal-actions"><button type="button" class="btn" id="sc">Cancelar</button><button class="btn primary">Registrar pagamento</button></div>
+    </form>`, (m, close) => {
+    const f = $("#sf", m);
+    $("#sc", m).onclick = close;
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      if (f.origem.value && f.origem.value === f.destino.value) return err(m, "Escolha contas diferentes.");
+      try {
+        const r = await C.api.rpc("app_settle", { pessoa_id: pessoaId, acao: "pago", data: f.data.value, forma: f.forma.value, conta_origem_id: f.origem.value || null, conta_destino_id: f.destino.value || null });
+        if (r.status === "nothing") return err(m, "Não há nada pendente.");
+        close(); C.state.boot = null; C.toast(`Acerto de ${C.brl(r.valor_cents)} registrado ✅`); after?.();
+      } catch (y) { err(m, y.message); }
+    };
+  });
+}
+
+// =====================================================================
+// Formulário de lançamento: dividir a compra
+// =====================================================================
+/** Monta a área "Dividir" dentro do formulário; devolve { show(bool), partes(total) } */
+export function splitArea(host, payDefault) {
+  const b = C.state.boot, membros = b.familia.membros;
+  const contas = b.contas.contas.filter((a) => a.status === "ativa");
+  const payOpts = (sel) => opts([...contas.map((a) => [`c:${a.id}`, `🏦 ${a.nome}`]), ...(b.cartoes || []).map((k) => [`k:${k.id}`, `💳 ${k.nome}`])], sel);
+  host.innerHTML = `<div class="split-box"><div class="small muted" style="margin-bottom:6px">Cada um com a sua parte. Se a parte de alguém for paga com cartão/conta de outra pessoa, vira <b>acerto</b> entre vocês.</div>
+    ${membros.map((mm) => `<div class="row split-row" data-m="${mm.id}">
+      <span class="split-name">${mm.eu ? "Eu" : C.esc(mm.nome.split(" ")[0])}</span>
+      <input class="input num" data-v inputmode="decimal" placeholder="0,00" style="max-width:110px">
+      <select class="input" data-p>${payOpts(payDefault())}</select></div>`).join("")}
+    <p class="small muted" data-sum></p></div>`;
+  let manual = false;
+  const rows = () => [...host.querySelectorAll(".split-row")];
+  host.addEventListener("input", (e) => { if (e.target.matches("[data-v]")) manual = true; });
+  return {
+    fill(total) {
+      if (manual || !(total > 0)) return;
+      const cents = Math.round(total * 100), n = rows().length;
+      rows().forEach((r, i) => { r.querySelector("[data-v]").value = C.moneyInput(Math.floor(cents / n) + (i === 0 ? cents % n : 0)); });
+    },
+    syncPay(v) { rows().forEach((r) => { r.querySelector("[data-p]").value = v; }); },
+    partes() {
+      return rows().map((r) => {
+        const [kind, id] = r.querySelector("[data-p]").value.split(":");
+        return { membro_id: r.dataset.m, valor: C.parseMoney(r.querySelector("[data-v]").value), ...(kind === "k" ? { cartao_id: id } : { conta_id: id }) };
+      });
+    },
+  };
 }
