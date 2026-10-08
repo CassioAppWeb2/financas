@@ -138,3 +138,27 @@ describe("divisão pela conversa", () => {
     expect(r.reply).toContain("dispensei");
   });
 });
+
+describe("áudio incompleto ou duvidoso", () => {
+  const audio = (uid: string, content: string) => handleMessage({ user_id: uid, channel: "app", type: "audio", content, timestamp: "" }, { db });
+  test("sem valor no áudio: avisa e pergunta o valor (e mantém a divisão)", async () => {
+    const r = await audio(ca, "Compra de um computador dividido em dois cartões. A metade pra mim e a metade pra Bruna.");
+    expect(r.reply).toContain("Não identifiquei o valor no áudio");
+    const r2 = await say(ca, "mil reais");
+    expect(r2.reply).toMatch(/R\$ 1\.000,00|dividid|categoria/);
+  });
+  test("valor por extenso duvidoso: confirma antes de lançar", async () => {
+    await say(ca, "cancela");
+    const r = await audio(ca, "gastei dois no mercado");
+    expect(r.reply).toContain("não tenho certeza");
+    const [{ n: antes }] = await q(`select count(*)::int n from transactions where user_id = $1`, ca);
+    const r2 = await say(ca, "foi 200");
+    expect(r2.reply).toContain("R$ 200,00");
+    const [{ n: depois }] = await q(`select count(*)::int n from transactions where user_id = $1`, ca);
+    expect(depois).toBe(antes + 1);
+  });
+  test("valor claro no áudio não pede confirmação", async () => {
+    const r = await audio(ca, "gastei 250 reais no mercado");
+    expect(r.reply).toContain("Registrei");
+  });
+});

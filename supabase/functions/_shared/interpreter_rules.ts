@@ -177,7 +177,7 @@ const RX = {
   correct: /\b(corrig\w*|corrij\w*|mud[ae]r?|alter[ae]r?|troc[ae]r?|na verdade|errei|era pra ser|nao era|o certo e|o correto e)\b/,
   question: /\?\s*$|^(quanto|quantos|quantas|qual|quais|como|onde|estou|to |ta |posso|da pra|consigo|tenho|me (mostra|mostre|diga|fala|passa)|mostra|mostre|resumo|compare|compara|saldo|extrato|relatorio|analis)/,
   income: /\b(recebi|recebo|recebemos|ganhamos|ganhei|ganho|entrou|entraram|entra|caiu|cairam|cai|vendi|faturei|depositaram|me pagaram|me pagou|me pagam|me transferiram|me mandaram)\b/,
-  expense: /\b(gastei|gasto|gastamos|paguei|pago|pagamos|comprei|compramos|pedimos|abastecemos|custou|custa|custam|saiu|sairam|torrei|desembolsei|assinei|abasteci|almocei|jantei|pedi|fiz uma compra|tive um gasto|tive uma despesa|despesa de|gasto de)\b/,
+  expense: /\b(gastei|gasto|gastamos|paguei|pago|pagamos|comprei|compramos|pedimos|abastecemos|custou|custa|custam|saiu|sairam|torrei|desembolsei|assinei|abasteci|almocei|jantei|pedi|fiz uma compra|tive um gasto|tive uma despesa|despesa de|gasto de|compra de|compras de|compra do|compra da|pagamento de|pagamento do|pagamento da|conta de)\b/,
   investment: /\b(investi|apliquei|aportei|aporte de|guardei|coloquei na poupanca|coloquei no investimento)\b/,
   redemption: /\b(resgatei|resgate de|saquei da poupanca|tirei da poupanca|tirei do investimento)\b/,
   transfer: /\b(transferi|transferencia|passei|movi|mandei|enviei)\b/,

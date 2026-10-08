@@ -42,6 +42,7 @@ type Pending = (
   | { kind: "ask_member_card"; interp: Interpretation; membro_id: string; options: string[] }
   | { kind: "confirm_settle"; pessoa_id: string; forma?: string; data?: string; label: string }
   | { kind: "agent"; history: GeminiContent[] }
+  | { kind: "confirm_value"; interp: Interpretation }
   | { kind: "agent_confirm"; call: AgentCall; history: GeminiContent[] }
 ) & { fila?: QueueItem[] };
 
@@ -283,7 +284,8 @@ async function createFlow(i: Interpretation, c: Ctx, extra: Record<string, unkno
   const tipo = i.tipo ?? "despesa";
   if (i.valor === undefined) {
     const what = i.descricao ? ` (${i.descricao})` : "";
-    return { reply: `Entendi ${TIPO_LABEL[tipo]}${what}. Qual foi o valor?`, pending: { kind: "ask_value", interp: i } };
+    const audio = c.msg.type === "audio" ? "🎧 Não identifiquei o valor no áudio. " : "";
+    return { reply: `${audio}Entendi ${TIPO_LABEL[tipo]}${what}. Qual foi o valor?`, pending: { kind: "ask_value", interp: i } };
   }
   if (i.alternativas && i.alternativas.length > 1) {
     return {
@@ -298,6 +300,13 @@ async function createFlow(i: Interpretation, c: Ctx, extra: Record<string, unkno
     };
   }
 
+  // Áudio com valor "fraco" (ex.: "dois" de "dois cartões", ou um valor muito baixo sem "reais"): confirma antes
+  if (c.msg.type === "audio" && !extra.confirmado && !extra.valor_confirmado && weakAudioAmount(c.msg.content, i.valor)) {
+    return {
+      reply: `🎧 No áudio entendi o valor **${brl(Math.round(i.valor * 100))}**${i.descricao ? ` (${i.descricao})` : ""}, mas não tenho certeza. Está certo? Responda *sim* ou diga o valor correto.`,
+      pending: { kind: "confirm_value", interp: i },
+    };
+  }
   if (i.dividir && tipo === "despesa") return splitFlow(i, c);
   const r = await c.deps.db.rpc<any>("fe_create_transaction", c.user, enginePayload(i, c, extra));
   switch (r.status) {
@@ -407,6 +416,15 @@ async function recurringFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
   return { reply, pending: null };
 }
 
+/** Valor que veio de um áudio e merece confirmação: escrito por extenso sem "reais" ou muito baixo. */
+function weakAudioAmount(text: string, valor?: number): boolean {
+  if (valor === undefined) return false;
+  const c = findAmounts(text).filter((x) => x.role === "valor" && Math.abs(x.value - valor) < 0.001);
+  if (!c.length) return true;                           // o valor não aparece claro no que foi transcrito
+  const best = Math.max(...c.map((x) => x.strength));
+  return best === 1 || (valor < 10 && best < 3);       // "dois", "três" ou "5" solto
+}
+
 /** Encaminha uma interpretação já completa para o fluxo certo (usado ao responder perguntas pendentes). */
 function saveFlow(i: Interpretation, c: Ctx, extra: Record<string, unknown> = {}): Promise<Outcome> {
   switch (i.intent) {
@@ -436,6 +454,13 @@ async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
 
   switch (p.kind) {
     case "confirm_create": if (yes) return createFlow(p.interp, c); break;
+    case "confirm_value": {
+      if (yes) return saveFlow(p.interp, c, { valor_confirmado: true });
+      const a = extractAmount(text);
+      if (a.valor) return saveFlow({ ...p.interp, valor: a.valor, alternativas: a.alternativas }, c, { valor_confirmado: true });
+      if (!looksLikeNewCommand(text, c.uc)) return { reply: "Qual é o valor certo? Ex.: *1.000* ou *mil reais*." };
+      break;
+    }
     case "confirm_duplicate": if (yes) return createFlow(p.interp, c, { forcar: true }); break;
     case "confirm_category": {
       if (yes) return createFlow(p.interp, c, { confirmado: true });
@@ -700,7 +725,7 @@ async function splitFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
       return { reply, cards: t ? [{ type: "transaction", data: { ...t, valor_cents: Math.round((i.valor ?? 0) * 100) } }] : undefined, pending: null };
     }
     case "no_family": return { reply: "Para dividir gastos, convide a outra pessoa em *Configurações → Família* no app. 🙂", pending: null };
-    case "needs_value": return { reply: "Qual foi o valor total da compra?", pending: { kind: "ask_value", interp: i } };
+    case "needs_value": return { reply: `${c.msg.type === "audio" ? "🎧 Não identifiquei o valor no áudio. " : ""}Qual foi o valor total da compra?`, pending: { kind: "ask_value", interp: i } };
     case "needs_category":
       return { reply: `Entendi uma compra de ${total} dividida. Em qual categoria?\n${categoryList(c, "despesa")}`, pending: { kind: "ask_category", interp: { ...i, categoria: undefined, subcategoria: undefined } } };
     case "needs_member_card":
