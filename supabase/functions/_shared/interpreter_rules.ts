@@ -237,6 +237,11 @@ export function detectSplit(text: string, ctx: UserContext): { partes?: NonNulla
   const m = n.match(SPLIT_WORDS);
   if (!m) return null;
   const idx = m.index ?? n.length;
+  // "dividi com a Amanda": pessoa de fora da família -> não é divisão da família
+  const firsts = (ctx.membros ?? []).map((x) => norm(x.nome).split(" ")[0]);
+  for (const w of n.slice(idx).matchAll(/\b(?:com|entre)\s+(?:a |o |as |os )?([a-z]+)/g)) {
+    if (!firsts.includes(w[1]) && !/^(eu|mim|ela|ele|voce|minha|meu|familia|nos|todos|esposa|marido|mulher|ela|dela|dele|a|o)$/.test(w[1])) return null;
+  }
   // corta a parte "dividido com a Bruna..." para não confundir estabelecimento/conta
   const cut = n.lastIndexOf(",", idx) > 0 && n.lastIndexOf(",", idx) > idx - 25 ? n.lastIndexOf(",", idx) : idx;
   return { clean: text.slice(0, cut).replace(/[,;\s]+$/, "") || text };

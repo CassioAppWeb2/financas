@@ -221,13 +221,63 @@ export async function execTool(call: AgentCall, c: Ctx): Promise<Record<string, 
 const AGENT_MODELS = ["gemini-flash-latest", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"];
 
 /** Um modelo por vez (o agente faz várias chamadas; correr modelos em paralelo gastaria a cota à toa). */
-async function askModel(cfg: AiConfig, body: unknown): Promise<any> {
-  const models = [...new Set([cfg.geminiModel, ...AGENT_MODELS].filter(Boolean) as string[])];
+// Modelo que respondeu por último (os próximos pedidos começam por ele) e se aceita "pensar pouco".
+let preferred: string | undefined;
+const noThinking = new Set<string>();
+
+async function askModel(cfg: AiConfig, body: any): Promise<any> {
+  const models = [...new Set([preferred, cfg.geminiModel, ...AGENT_MODELS].filter(Boolean) as string[])];
   let last: unknown;
   for (const m of models) {
-    try { return (await geminiCall(cfg, body, 25000, [m])).data; } catch (e) { last = e; }
+    // "pensar pouco" deixa a resposta bem mais rápida; se o modelo não aceitar a opção, tenta sem ela
+    if (!noThinking.has(m)) {
+      try {
+        const fast = { ...body, generationConfig: { ...body.generationConfig, thinkingConfig: { thinkingLevel: "minimal" } } };
+        const r = (await geminiCall(cfg, fast, 20000, [m])).data; preferred = m; return r;
+      } catch (e) {
+        last = e;
+        if (!/\b400\b/.test(String((e as Error).message))) continue;
+        noThinking.add(m);
+      }
+    }
+    try { const r = (await geminiCall(cfg, body, 20000, [m])).data; preferred = m; return r; } catch (e) { last = e; }
   }
   throw last ?? new Error("IA indisponível");
+}
+
+// Confirmação pronta (sem segunda ida à IA) para os cadastros que deram certo
+function memberName(c: Ctx, dono: unknown): string | undefined {
+  if (dono == null || dono === "") return undefined;
+  const n = norm(String(dono));
+  if (/^(eu|meu|minha|mim)/.test(n)) return undefined;
+  if (/(familia|conjunt|compartilhad|nosso|nossa|casa)/.test(n)) return "a família";
+  return (c.uc.membros ?? []).find((m) => norm(m.nome).split(" ")[0] === n.split(" ")[0])?.nome.split(" ")[0] ?? String(dono);
+}
+function confirmText(call: AgentCall, r: any, c: Ctx): string | null {
+  const a = call.args ?? {};
+  const quem = memberName(c, a.dono);
+  const alt = (o: Record<string, unknown>) => Object.entries(o).filter(([, v]) => v != null && v !== "").map(([k, v]) => `${k} ${v}`).join(", ");
+  switch (call.name) {
+    case "cadastrar_cartao":
+      return `✅ Cartão **${a.nome}**${quem ? ` ${quem === "a família" ? "da família" : `de ${quem}`}` : ""} cadastrado: fecha dia ${a.dia_fechamento} e vence dia ${a.dia_vencimento}${a.limite ? `, limite ${brl(Math.round(Number(a.limite) * 100))}` : ""}.`;
+    case "editar_cartao":
+      return `✅ Cartão **${r.cartao}** atualizado: ${alt({ "novo nome": a.novo_nome, fechamento: a.dia_fechamento != null ? `dia ${a.dia_fechamento}` : null,
+        vencimento: a.dia_vencimento != null ? `dia ${a.dia_vencimento}` : null, limite: a.limite != null ? brl(Math.round(Number(a.limite) * 100)) : null,
+        dono: quem, "conta de pagamento": a.conta_pagamento })}.`;
+    case "cadastrar_conta":
+      return `✅ Conta **${a.nome}**${quem ? ` ${quem === "a família" ? "da família" : `de ${quem}`}` : ""} criada${a.saldo_inicial != null ? ` com saldo de ${brl(Math.round(Number(a.saldo_inicial) * 100))}` : ""}${a.padrao ? " (padrão)" : ""}.`;
+    case "editar_conta":
+      return `✅ Conta **${r.conta}** atualizada: ${alt({ "novo nome": a.novo_nome, tipo: a.tipo, "saldo inicial": a.saldo_inicial != null ? brl(Math.round(Number(a.saldo_inicial) * 100)) : null,
+        dono: quem, banco: a.instituicao, padrão: a.padrao ? "sim" : null })}.`;
+    case "criar_categoria": return `✅ Categoria **${a.nome}** criada (${a.tipo}).`;
+    case "renomear_categoria": return `✅ Categoria renomeada: ${r.de} → **${r.para}**.`;
+    case "criar_subcategoria": return `✅ Subcategoria **${r.subcategoria}** criada em **${r.categoria}**.`;
+    case "criar_meta": return `🎯 Meta **${r.meta}** criada: ${r.objetivo}${r.prazo ? ` até ${r.prazo}` : ""}${r.guardar_por_mes ? ` — guarde cerca de ${r.guardar_por_mes} por mês` : ""}.`;
+    case "editar_meta": return `🎯 Meta **${r.meta}** atualizada: ${r.objetivo}${r.prazo ? ` até ${r.prazo}` : ""}.`;
+    case "definir_orcamento": return `💵 Orçamento de **${r.categoria}**: ${r.valor_mensal} por mês${r.gasto_no_mes ? ` (gasto até agora: ${r.gasto_no_mes})` : ""}.`;
+    case "definir_meta_economia_mensal": return `✅ Meta de economia: **${r.meta_economia_mensal}** por mês.`;
+  }
+  return null;   // consultas: a IA monta a resposta com os dados
 }
 
 export async function runAgent(text: string, history: GeminiContent[], c: Ctx, cfg: AiConfig): Promise<AgentResult> {
@@ -256,13 +306,17 @@ export async function runAgent(text: string, history: GeminiContent[], c: Ctx, c
       return { reply: `Confirma ${what}? (*sim* / *não*)`, confirm: { call, history: contents } };
     }
     const responses = [];
+    const ready: (string | null)[] = [];
     for (const k of calls.slice(0, 3)) {
-      if (DESTRUCTIVE.has(k.name)) { responses.push({ functionResponse: { name: k.name, response: { erro: "Faça esta ação separadamente, com confirmação." } } }); continue; }
+      if (DESTRUCTIVE.has(k.name)) { responses.push({ functionResponse: { name: k.name, response: { erro: "Faça esta ação separadamente, com confirmação." } } }); ready.push(null); continue; }
       let result: Record<string, unknown>;
       try { result = await execTool(k, c); } catch (e) { result = { erro: (e as Error).message }; }
       responses.push({ functionResponse: { name: k.name, response: result } });
+      ready.push(result.erro ? null : confirmText(k, result, c));
     }
     contents.push({ role: "user", parts: responses });
+    // tudo gravado com sucesso: responde na hora, sem esperar outra resposta da IA
+    if (ready.length && ready.every(Boolean)) return { reply: ready.join("\n"), done: true };
   }
   return { reply: "Fiz o que consegui. Confira em *Cadastros* no app. 🙂", done: true };
 }

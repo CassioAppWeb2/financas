@@ -48,8 +48,8 @@ describe("cadastros conversando", () => {
     // a IA recebeu a conversa anterior e o resultado da ferramenta
     const last = sent[sent.length - 1];
     expect(JSON.stringify(last.contents)).toContain("vencimento dia 10");
-    expect(JSON.stringify(last.contents)).toContain("functionResponse");
-    expect(JSON.stringify(last.contents)).toContain("thoughtSignature");
+    expect(last.generationConfig.thinkingConfig.thinkingLevel).toBe("minimal");
+    expect(r2.reply).toContain("de Bruna");
     const [k] = await q(`select name, closing_day, due_day, member_id from credit_cards where user_id = $1`, ca);
     expect([k.name, k.closing_day, k.due_day, k.member_id]).toEqual(["Nubank", 3, 10, br]);
   });
@@ -74,6 +74,7 @@ describe("cadastros conversando", () => {
     const r = await say(ca, "mude o limite do santander para 100");
     expect(r.reply).toContain("Não encontrei");
     expect(JSON.stringify(sent[sent.length - 1].contents)).toContain("Não encontrei o cartão");
+    expect(JSON.stringify(sent[sent.length - 1].contents)).toContain("thoughtSignature");
   });
 
   test("subcategoria e meta de economia", async () => {
