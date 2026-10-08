@@ -329,3 +329,10 @@ button.card.kpi:focus-visible { outline: 2px solid var(--brand); outline-offset:
 .split-row { margin-bottom: 6px; flex-wrap: nowrap; }
 .split-row .split-name { min-width: 54px; font-weight: 700; font-size: 14px; }
 .split-row select { flex: 1; min-width: 0; }
+
+/* gravação de áudio no assistente */
+.recbar { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 0 0 0 4px; min-height: 46px; }
+.recbar #recCancel { background: var(--surface-2); }
+.recbar .rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); animation: pulse 1.2s infinite; flex: none; }
+.recbar .num { font-weight: 800; font-size: 15px; }
+.recbar .rec-hint { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

@@ -537,9 +537,14 @@ async function chat(page) {
     <div class="messages" id="msgs" aria-live="polite"></div>
     <div class="chips" id="chips">${SUGGESTIONS.map((s) => `<button>${esc(s)}</button>`).join("")}</div>
     <form class="composer" id="composer">
-      <button type="button" class="round mic" id="mic" aria-label="Falar">🎙️</button>
-      <textarea class="input" id="txt" rows="1" placeholder="Ex.: gastei 50 na padaria" maxlength="2000"></textarea>
-      <button class="round send" aria-label="Enviar">➤</button>
+      <button type="button" class="round mic" id="mic" aria-label="Gravar áudio" title="Gravar áudio">🎙️</button>
+      <textarea class="input" id="txt" rows="1" placeholder="Digite ou toque no 🎙️ para falar" maxlength="2000"></textarea>
+      <button class="round send" id="sendBtn" aria-label="Enviar">➤</button>
+      <div class="recbar hidden" id="recbar" role="status">
+        <button type="button" class="round" id="recCancel" aria-label="Cancelar gravação" title="Cancelar">✕</button>
+        <span class="rec-dot"></span><span class="num" id="recTime">0:00</span><span class="small muted rec-hint">Gravando… fale o gasto ou a pergunta</span>
+        <button type="button" class="round send" id="recSend" aria-label="Enviar áudio" title="Enviar">➤</button>
+      </div>
     </form>
   </div>`;
   const box = $("#msgs"), txt = $("#txt");
@@ -553,7 +558,8 @@ async function chat(page) {
   async function send(text, type = "text", extra = {}) {
     if (busy || (!text.trim() && !extra.audio_base64)) return;
     busy = true; chatSending = true;
-    if (text.trim()) box.insertAdjacentHTML("beforeend", bubble({ role: "user", content: text, channel: "app", message_type: type, created_at: new Date().toISOString() }));
+    if (text.trim() || extra.label) box.insertAdjacentHTML("beforeend", bubble({ role: "user", content: text.trim() || extra.label, channel: "app", message_type: type, created_at: new Date().toISOString() }));
+    delete extra.label;
     box.insertAdjacentHTML("beforeend", `<div class="typing" id="typing"><i></i><i></i><i></i></div>`);
     scroll();
     try {
@@ -572,51 +578,57 @@ async function chat(page) {
   txt.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#composer").requestSubmit(); } });
   txt.addEventListener("input", () => { txt.style.height = "auto"; txt.style.height = Math.min(txt.scrollHeight, 120) + "px"; });
   $("#chips").onclick = (e) => { const b = e.target.closest("button"); if (b) send(b.textContent); };
-  setupMic($("#mic"), txt, send);
+  setupMic(send);
 }
 
-/** Microfone: usa o reconhecimento de voz do navegador (gratuito); se não houver, grava e envia o áudio ao servidor. */
-function setupMic(btn, txt, send) {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (SR) {
-    let rec = null, finalText = "";
-    btn.onclick = () => {
-      if (rec) { rec.stop(); return; }
-      rec = new SR();
-      rec.lang = "pt-BR"; rec.interimResults = true; rec.continuous = false;
-      finalText = "";
-      rec.onresult = (e) => {
-        let interim = "";
-        for (const r of e.results) (r.isFinal ? (finalText += r[0].transcript) : (interim += r[0].transcript));
-        txt.value = finalText + interim;
-      };
-      rec.onerror = (e) => { if (e.error === "not-allowed") toast("Permita o uso do microfone para falar com o assistente."); };
-      rec.onend = () => { btn.classList.remove("rec"); rec = null; const v = txt.value.trim(); if (v) { txt.value = ""; send(v, "audio"); } };
-      btn.classList.add("rec"); rec.start();
-    };
+/**
+ * Microfone: grava o áudio no celular/computador e envia ao servidor, que transcreve (Groq/Gemini) —
+ * o mesmo caminho dos áudios do Telegram. Toque para gravar; ➤ envia, ✕ cancela. Máximo de 2 minutos.
+ */
+function setupMic(send) {
+  const btn = $("#mic"), bar = $("#recbar"), timeEl = $("#recTime");
+  const hideWhileRec = [$("#mic"), $("#txt"), $("#sendBtn")];
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    btn.onclick = () => toast("Este navegador não permite gravar áudio. Atualize o navegador ou use o Telegram.");
     return;
   }
-  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { btn.classList.add("hidden"); return; }
-  let mr = null;
+  const pickMime = () => ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus", "audio/aac"].find((t) => MediaRecorder.isTypeSupported?.(t)) || "";
+  let mr = null, stream = null, chunks = [], started = 0, tick = null, cancelled = false;
+  const fmt = (ms) => { const s2 = Math.floor(ms / 1000); return `${Math.floor(s2 / 60)}:${String(s2 % 60).padStart(2, "0")}`; };
+  const ui = (rec) => { bar.classList.toggle("hidden", !rec); hideWhileRec.forEach((e) => e.classList.toggle("hidden", rec)); };
+  const stopAll = () => { clearInterval(tick); stream?.getTracks().forEach((t) => t.stop()); stream = null; ui(false); };
   btn.onclick = async () => {
-    if (mr) { mr.stop(); return; }
+    if (mr) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const chunks = [];
-      mr = new MediaRecorder(stream);
-      mr.ondataavailable = (e) => chunks.push(e.data);
-      mr.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        btn.classList.remove("rec");
-        const blob = new Blob(chunks, { type: mr.mimeType || "audio/webm" });
-        mr = null;
-        const b64 = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.readAsDataURL(blob); });
-        send("", "audio", { audio_base64: b64, mime: blob.type });
-      };
-      mr.start(); btn.classList.add("rec");
-      setTimeout(() => mr?.state === "recording" && mr.stop(), 60_000);
-    } catch { toast("Não foi possível acessar o microfone."); }
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    } catch (e) {
+      toast(e?.name === "NotAllowedError" ? "Permita o uso do microfone nas configurações do navegador para gravar áudio." : "Não foi possível acessar o microfone.");
+      return;
+    }
+    const mime = pickMime();
+    mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    chunks = []; cancelled = false; started = Date.now();
+    mr.ondataavailable = (e) => { if (e.data?.size) chunks.push(e.data); };
+    mr.onstop = async () => {
+      const dur = Date.now() - started, type = (mr.mimeType || mime || "audio/webm").split(";")[0];
+      mr = null; stopAll();
+      if (cancelled) return;
+      if (dur < 700 || !chunks.length) { toast("Áudio muito curto. Toque no 🎙️, fale e depois toque em ➤."); return; }
+      const blob = new Blob(chunks, { type });
+      const b64 = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.readAsDataURL(blob); });
+      send("", "audio", { audio_base64: b64, mime: type, label: `🎙️ Áudio (${fmt(dur)}) — transcrevendo…` });
+    };
+    mr.start(250);
+    ui(true); timeEl.textContent = "0:00";
+    tick = setInterval(() => {
+      const el = Date.now() - started;
+      timeEl.textContent = fmt(el);
+      if (el >= 120_000 && mr?.state === "recording") mr.stop();
+    }, 250);
+    navigator.vibrate?.(30);
   };
+  $("#recSend").onclick = () => { if (mr?.state === "recording") mr.stop(); };
+  $("#recCancel").onclick = () => { cancelled = true; if (mr?.state === "recording") mr.stop(); else stopAll(); };
 }
 
 // ---------------------------------------------------------------- CONTAS
