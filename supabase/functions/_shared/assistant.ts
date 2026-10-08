@@ -38,6 +38,8 @@ type Pending = (
   | { kind: "confirm_cancel_recurring"; id: string; label: string }
   | { kind: "import_dest"; st: Statement; options: string[]; campo: "cartao" | "conta" }
   | { kind: "confirm_import"; st: Statement; dest: ImportDest }
+  | { kind: "ask_member_card"; interp: Interpretation; membro_id: string; options: string[] }
+  | { kind: "confirm_settle"; pessoa_id: string; forma?: string; data?: string; label: string }
 ) & { fila?: QueueItem[] };
 
 interface Outcome extends AssistantReply { pending?: Pending | null; }
@@ -208,6 +210,8 @@ async function dispatch(i: Interpretation, c: Ctx): Promise<Outcome> {
     case "QUERY_RECURRING": out = await recurringsQuery(c); break;
     case "CANCEL_RECURRING": out = await cancelRecurringFlow(i, c); break;
     case "QUERY_ALERTS": out = await alertsQuery(c); break;
+    case "QUERY_DEBTS": out = await debtsQuery(c); break;
+    case "SETTLE_DEBT": out = await settleFlow(i, c); break;
     case "GREETING":
       out = /obrigad|valeu|vlw|brigad/.test(norm(c.msg.content))
         ? { reply: "De nada! 😊 Estou por aqui quando precisar." }
@@ -229,6 +233,7 @@ const HELP = `Sou seu assistente financeiro. Basta conversar comigo:
 💰 *Receitas*: “recebi 1.000 de salário”, “entrou 3 mil de vendas”
 💳 *Cartão*: “comprei uma TV de 3.000 em 10x no cartão Nubank”, “quanto está a fatura?”, “paguei a fatura do Nubank”
 📄 *Fatura em PDF*: mande o PDF ou a foto da fatura do cartão (ou do extrato) que eu leio e lanço tudo
+🤝 *Dividir*: “jantar de 150 no Nubank dividido com a Bruna”, “250 no mercado, metade no meu cartão e metade no da Bruna”, “quanto devo?”, “acertei com a Bruna”
 🔄 *Contas fixas*: “minha internet custa 120 todo dia 10”, “recebo 7 mil todo quinto dia útil”, “não pago mais a Netflix”
 🎯 *Metas*: “quero juntar 20 mil até dezembro para a viagem”, “guardei 500 na meta viagem”, “como estão minhas metas?”
 💵 *Orçamento*: “orçamento de 1.000 para alimentação”, “como está meu orçamento?”
@@ -287,6 +292,7 @@ async function createFlow(i: Interpretation, c: Ctx, extra: Record<string, unkno
     };
   }
 
+  if (i.dividir && tipo === "despesa") return splitFlow(i, c);
   const r = await c.deps.db.rpc<any>("fe_create_transaction", c.user, enginePayload(i, c, extra));
   switch (r.status) {
     case "created": return createdReply(r, i, c);
@@ -504,6 +510,28 @@ async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
       }
       break;
     }
+    case "ask_member_card": {
+      const card = p.options.find((o) => norm(o) === n) ?? p.options.find((o) => n.includes(norm(o)) || norm(o).includes(n)) ?? matchCard(text, c.uc);
+      if (card) {
+        const partes = (p.interp.partes ?? []).map((x) => x.membro === p.membro_id ? { ...x, cartao: card } : x);
+        return splitFlow({ ...p.interp, partes }, c);
+      }
+      if (!looksLikeNewCommand(text, c.uc)) return { reply: `Escolha um destes cartões: ${p.options.join(" · ")}` };
+      break;
+    }
+    case "confirm_settle": {
+      if (/^(ok|okay|dispensa\w*|esquece)\b/.test(n)) {
+        const r = await c.deps.db.rpc<any>("fe_settle", c.user, { pessoa_id: p.pessoa_id, acao: "dispensar", origem: origin(c) });
+        return { reply: r.status === "nothing" ? "Não há nada pendente. 👍" : `👍 Ok, dispensei o acerto de ${brl(r.valor_cents)} — sem lançamento.`, pending: null };
+      }
+      if (yes || /\b(paguei|pago|ja paguei)\b/.test(n)) {
+        const r = await c.deps.db.rpc<any>("fe_settle", c.user, { pessoa_id: p.pessoa_id, acao: "pago", forma: p.forma, data: p.data, origem: origin(c) });
+        if (r.status === "nothing") return { reply: "Não há nada pendente para acertar. 👍", pending: null };
+        return { reply: `✅ Acerto registrado: ${r.devedor} pagou ${brl(r.valor_cents)} para ${r.credor}.` +
+          (r.transferencia ? `\nLancei como transferência: ${r.conta_origem} → ${r.conta_destino} (não conta como despesa nova).` : `\n(Não lancei transferência porque falta conta cadastrada de um de vocês.)`), pending: null };
+      }
+      break;
+    }
     case "confirm_cancel_recurring": {
       if (yes) {
         const r = await c.deps.db.rpc<any>("fe_cancel_recurring", c.user, { id: p.id, origem: origin(c) });
@@ -612,6 +640,73 @@ async function correctFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
 // ---------------------------------------------------------------------------
 // CONSULTAS (sempre com dados reais do banco)
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Compras divididas e acertos da família
+// ---------------------------------------------------------------------------
+async function splitFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
+  const partes = i.partes?.map((x) => ({ membro_id: x.membro, cartao: x.cartao, cartao_do_membro: x.cartao_do_membro, conta: x.conta }));
+  const r = await c.deps.db.rpc<any>("fe_create_split", c.user, { ...enginePayload(i, c), familia: undefined, dividir: true, partes });
+  const total = brl(Math.round((i.valor ?? 0) * 100));
+  switch (r.status) {
+    case "created": {
+      const lines = r.partes.map((x: any) => {
+        const quem = x.membro_id === c.user ? "Você" : x.membro;
+        const onde = x.cartao ? `no cartão ${x.cartao}${x.fatura ? ` (fatura de ${dateBR(x.fatura)})` : ""}` : x.conta ? `na conta ${x.conta}` : "";
+        return `• ${quem}: ${brl(x.valor_cents)} ${onde}${x.deve_para ? ` — a acertar com ${x.deve_para === c.uc.nome ? "você" : x.deve_para.split(" ")[0]}` : ""}`;
+      });
+      const t = r.lancamento;
+      let reply = `✅ Registrei ${total}${t?.categoria ? ` em **${t.categoria}${t.subcategoria ? ` > ${t.subcategoria}` : ""}**` : ""}, dividido:\n${lines.join("\n")}`;
+      if (r.parcelas > 1) reply += `\n(em ${r.parcelas}x)`;
+      const devendo = r.partes.filter((x: any) => x.deve_para);
+      if (devendo.length) {
+        const outro = devendo[0].deve_para === c.uc.nome ? devendo[0].membro : devendo[0].deve_para;
+        reply += `\n\n🤝 Vou somar isso nos *acertos do mês*. Quando acertarem, diga “acertei com ${outro.split(" ")[0]}” ou toque em *Paguei* no app.`;
+      }
+      return { reply, cards: t ? [{ type: "transaction", data: { ...t, valor_cents: Math.round((i.valor ?? 0) * 100) } }] : undefined, pending: null };
+    }
+    case "no_family": return { reply: "Para dividir gastos, convide a outra pessoa em *Configurações → Família* no app. 🙂", pending: null };
+    case "needs_value": return { reply: "Qual foi o valor total da compra?", pending: { kind: "ask_value", interp: i } };
+    case "needs_category":
+      return { reply: `Entendi uma compra de ${total} dividida. Em qual categoria?\n${categoryList(c, "despesa")}`, pending: { kind: "ask_category", interp: { ...i, categoria: undefined, subcategoria: undefined } } };
+    case "needs_member_card":
+      return { reply: `${r.membro.split(" ")[0]} ainda não tem cartão cadastrado no app. 💳 Peça para ${r.membro_id === c.user ? "você" : "ela/ele"} cadastrar em *Cartões* (entrando com o próprio login, ou você cadastra e escolhe "De quem é o cartão") e me mande de novo.`, pending: null };
+    case "choose_member_card":
+      return { reply: `Qual cartão ${r.membro_id === c.user ? "seu" : `de ${r.membro.split(" ")[0]}`}? ${r.cartoes.join(" · ")}`,
+        pending: { kind: "ask_member_card", interp: i, membro_id: r.membro_id, options: r.cartoes } };
+    case "needs_card": case "unknown_card":
+      if (!r.cartoes?.length) return { reply: "Você ainda não cadastrou cartões. Cadastre em *Cartões* no app. 💳", pending: null };
+      return { reply: `${r.status === "unknown_card" ? `Não encontrei o cartão “${r.cartao}”. ` : ""}Em qual cartão foi? ${r.cartoes.join(" · ")}`, pending: { kind: "ask_card", interp: i, options: r.cartoes } };
+    case "no_cards": return { reply: "Ainda não há cartões cadastrados. Cadastre em *Cartões* no app e me mande de novo. 💳", pending: null };
+    case "unknown_account": return { reply: `Não encontrei a conta “${r.conta}”. Contas: ${c.uc.contas.join(", ")}.`, pending: { kind: "ask_account", interp: i, campo: "conta" } };
+  }
+  return { reply: "Não consegui registrar a divisão. Confira os dados e tente de novo.", pending: null };
+}
+
+async function debtsQuery(c: Ctx): Promise<Outcome> {
+  const d = await c.deps.db.rpc<any>("fe_debts", c.user, {});
+  if (!d.devo.length && !d.recebo.length) return { reply: "Nenhum acerto pendente este mês. 👍" + (d.futuro_cents ? `\n(Há ${brl(d.futuro_cents)} de parcelas divididas para os próximos meses.)` : "") };
+  const lines: string[] = [];
+  for (const x of d.devo) lines.push(`🔴 Você deve ${brl(x.total_cents)} para ${x.pessoa.split(" ")[0]} (${x.itens.length} gasto(s) dividido(s))`);
+  for (const x of d.recebo) lines.push(`🟢 ${x.pessoa.split(" ")[0]} deve ${brl(x.total_cents)} para você (${x.itens.length} gasto(s) dividido(s))`);
+  const ex = [...d.devo, ...d.recebo][0];
+  return { reply: `🤝 Acertos do mês:\n${lines.join("\n")}\n\nQuando pagarem, diga “acertei com ${ex.pessoa.split(" ")[0]}” (ou “fiz pix pra ${ex.pessoa.split(" ")[0]}”).` };
+}
+
+async function settleFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
+  const d = await c.deps.db.rpc<any>("fe_debts", c.user, {});
+  const devo = d.devo.find((x: any) => x.pessoa_id === i.pessoa_id)?.total_cents ?? 0;
+  const recebo = d.recebo.find((x: any) => x.pessoa_id === i.pessoa_id)?.total_cents ?? 0;
+  const nome = (c.uc.membros ?? []).find((m) => m.id === i.pessoa_id)?.nome.split(" ")[0] ?? "a outra pessoa";
+  const liquido = devo - recebo;
+  if (!liquido) return { reply: `Não há acerto pendente com ${nome} este mês. 👍`, pending: null };
+  const label = liquido > 0 ? `você pagou ${brl(liquido)} para ${nome}` : `${nome} pagou ${brl(-liquido)} para você`;
+  const aviso = i.valor && Math.round(i.valor * 100) !== Math.abs(liquido) ? `\n⚠️ O acerto pendente é de ${brl(Math.abs(liquido))} (você falou ${brl(Math.round(i.valor * 100))}). Registro o acerto completo.` : "";
+  return {
+    reply: `🤝 Vou registrar que ${label}${i.forma_pagamento ? ` (${i.forma_pagamento})` : ""}, quitando os gastos divididos do mês, e lançar a transferência entre as contas de vocês.${aviso}\nConfirma? (*sim* / *não*) — ou *ok* para só dispensar, sem lançamento.`,
+    pending: { kind: "confirm_settle", pessoa_id: i.pessoa_id!, forma: i.forma_pagamento, data: i.data, label },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Cartões e faturas
 // ---------------------------------------------------------------------------

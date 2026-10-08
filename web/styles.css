@@ -314,3 +314,18 @@ a { color: var(--brand); }
   details { display: block; } details > * { display: block; }
   a { color: inherit; text-decoration: none; }
 }
+
+/* painéis clicáveis, acertos e divisão */
+button.card { font: inherit; color: inherit; text-align: left; cursor: pointer; width: 100%; }
+button.card.kpi:hover { box-shadow: 0 0 0 2px var(--brand-soft), var(--shadow); }
+button.card.kpi:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.kpi.hero { border: 0; }
+.acerto { border-radius: 10px; padding: 10px 12px; margin-top: 8px; background: var(--surface-2); }
+.acerto.bad { background: #fde3dc; }
+.acerto.ok { background: var(--brand-soft); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .acerto.bad { background: #4a2018; } }
+.acerto details { margin-top: 6px; }
+.split-box { border: 1px dashed var(--line); border-radius: 10px; padding: 10px; margin-bottom: 12px; }
+.split-row { margin-bottom: 6px; flex-wrap: nowrap; }
+.split-row .split-name { min-width: 54px; font-weight: 700; font-size: 14px; }
+.split-row select { flex: 1; min-width: 0; }

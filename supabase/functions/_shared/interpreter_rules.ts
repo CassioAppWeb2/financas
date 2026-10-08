@@ -201,6 +201,47 @@ export function detectMember(n: string, ctx: UserContext): string | undefined {
   return undefined;
 }
 
+// ---------------------------------------------------------------------------
+// Compra dividida: "dividido com a Bruna", "meio a meio", "metade no meu cartão e metade no da Bruna"
+// ---------------------------------------------------------------------------
+const SPLIT_WORDS = /\b(dividid[oa]s?|dividir|dividimos|dividi|divide|rachad[oa]s?|rachar|rachamos|rachei|racha|meio a meio|metade cada|metade (pra|para) cada|cada um (com|paga|pagou) (a )?metade)\b/;
+const SPLIT_HALVES = /\bmetade (?:no|na|pelo|pela|com|do|da|em) (.+?) e (?:a outra )?metade (?:no|na|pelo|pela|com|do|da|em) (.+)$/;
+
+function memberIn(seg: string, ctx: UserContext): string | undefined {
+  const membros = ctx.membros ?? [];
+  if (/\b(meu|minha|eu)\b/.test(seg)) return membros.find((m) => m.eu)?.id;
+  for (const m of membros.filter((x) => !x.eu)) {
+    const first = norm(m.nome).split(" ")[0];
+    if (first.length >= 2 && new RegExp(`(^|[^a-z])${first}([^a-z]|$)`).test(seg)) return m.id;
+  }
+  if (membros.length === 2 && /\b(dela|dele|da minha esposa|do meu marido|da esposa|do marido)\b/.test(seg)) return membros.find((m) => !m.eu)?.id;
+  return undefined;
+}
+
+export function detectSplit(text: string, ctx: UserContext): { partes?: NonNullable<Interpretation["partes"]>; clean: string } | null {
+  if ((ctx.membros?.length ?? 0) < 2) return null;
+  const n = norm(text);
+  const h = n.match(SPLIT_HALVES);
+  if (h) {
+    const partes: NonNullable<Interpretation["partes"]> = [];
+    for (const seg of [h[1], h[2]]) {
+      const membro = memberIn(seg, ctx);
+      if (!membro) return null;
+      const cc = matchCard(seg, ctx);
+      const conta = !cc && !/\b(cartao|credito)\b/.test(seg) ? matchAccount(seg, ctx) : undefined;
+      partes.push(cc ? { membro, cartao: cc } : conta ? { membro, conta } : { membro, cartao_do_membro: true });
+    }
+    if (partes[0].membro === partes[1].membro) return null;
+    return { partes, clean: text.slice(0, n.indexOf(h[0])).replace(/[,;\s]+$/, "") };
+  }
+  const m = n.match(SPLIT_WORDS);
+  if (!m) return null;
+  const idx = m.index ?? n.length;
+  // corta a parte "dividido com a Bruna..." para não confundir estabelecimento/conta
+  const cut = n.lastIndexOf(",", idx) > 0 && n.lastIndexOf(",", idx) > idx - 25 ? n.lastIndexOf(",", idx) : idx;
+  return { clean: text.slice(0, cut).replace(/[,;\s]+$/, "") || text };
+}
+
 function detectQuery(n: string, text: string, ctx: UserContext): Partial<Interpretation> | null {
   const isQ = RX.question.test(n) || /\bquanto\b/.test(n) || /^(compare|compara|comparar)/.test(n);
   if (!isQ) return null;
@@ -311,6 +352,21 @@ export function interpretRules(input: string, ctx: UserContext): Interpretation 
     const desc = text.replace(/^.*?\b(?:parei de pagar|n[aã]o pago mais|n[aã]o vou mais pagar|cancel\w*|encerr\w*)\s+(?:(?:a|o)\s+)?(?:(?:assinatura|recorr[eê]ncia|conta fixa|d[eé]bito autom[aá]tico)\s*(?:d[aeo]s?\s+)?)?/i, "").replace(/[.!?]+$/, "").trim();
     return { ...out, intent: "CANCEL_RECURRING", descricao: desc || undefined, confidence: 0.88 };
   }
+  // Acertos da família: "quanto devo pra Bruna?", "paguei a Bruna", "acertei com o Cássio"
+  if ((ctx.membros?.length ?? 0) > 1) {
+    if (/\b(acertos?|quanto (eu )?devo|quanto (a|o) \w+ (me )?deve|quem deve|devo (pra|para|a|ao)|me deve|deve pra mim|gastos divididos)\b/.test(n) && (RX.question.test(n) || /^(quanto|quem|qual|como|tem|tenho)/.test(n) || /\bacertos?\b/.test(n) && !/\bacertei\b/.test(n))) {
+      return { ...out, intent: "QUERY_DEBTS", confidence: 0.9 };
+    }
+    const outro = (ctx.membros ?? []).find((m) => !m.eu && new RegExp(`(^|[^a-z])${norm(m.nome).split(" ")[0]}([^a-z]|$)`).test(n));
+    const alvoOutro = outro ?? ((ctx.membros?.length === 2 && /\b(minha esposa|meu marido|ela|ele)\b/.test(n)) ? ctx.membros!.find((m) => !m.eu) : undefined);
+    if (alvoOutro && !/\bfatura\b/.test(n) && !RX.question.test(n) &&
+        (/\b(acertei|acertamos|quitei|zerei|zeramos)\b/.test(n) ||
+         /\b(paguei|pago|transferi|mandei|fiz (um |o )?pix|passei)\b.{0,25}\b(pr[ao]|para (a |o )?|a |ao |o )\s*\S*\s*$/.test(n.replace(/\s+(via|por|no|pelo|em)\s+(pix|dinheiro|transferencia|ted)\b.*$/, "")) ||
+         /\b(minha parte|a parte dela|a parte dele|o que (eu )?devia|o que devo|o acerto)\b/.test(n))) {
+      return { ...out, intent: "SETTLE_DEBT", pessoa_id: alvoOutro.id, valor: amount.valor,
+        forma_pagamento: paymentMethod(n) ?? (/\btransferencia|ted\b/.test(n) ? "transferencia" : undefined), data: resolveDate(text, today).data, confidence: 0.88 };
+    }
+  }
   // Pagar fatura: "paguei a fatura do Nubank", "paguei o cartão"
   if (/\b(paguei|pago|quitei|pagar|vou pagar|paga)\b/.test(n) && (/\bfatura\b/.test(n) || /\b(paguei|quitei|pagar) (o |meu )?cartao\b/.test(n)) && !RX.question.test(n)) {
     const contaPg = /\b(da|pela|na|com a) conta\b|\bcom (o )?saldo\b|\bdebit\w*\b|\bpelo pix\b/.test(n) ? matchAccount(text.replace(/\bfatura d[oa]s? \S+/i, ""), ctx) : undefined;
@@ -409,9 +465,21 @@ export function interpretRules(input: string, ctx: UserContext): Interpretation 
     confidence: verbless ? 0.7 : amount.valor ? 0.92 : 0.8,
   };
 
+  const split = tipo === "despesa" && intent === "CREATE_EXPENSE" ? detectSplit(text, ctx) : null;
+  if (split) {
+    res.dividir = true; res.familia = undefined;
+    if (split.partes) { res.partes = split.partes; res.cartao = undefined; res.conta = undefined; }
+    else {
+      const cc = matchCard(split.clean, ctx);
+      res.cartao = cc && (/\b(cartao|credito)\b/.test(norm(split.clean)) || !matchAccount(split.clean, ctx)) ? cc : undefined;
+      res.conta = !res.cartao ? matchAccount(split.clean, ctx) : undefined;
+      res.forma_pagamento = paymentMethod(norm(split.clean));
+    }
+  }
   if (tipo === "despesa" || tipo === "receita") {
-    res.estabelecimento = extractEstablishment(text, ctx);
-    res.descricao = extractObject(text) ?? res.estabelecimento;
+    const base = split?.clean || text;
+    res.estabelecimento = extractEstablishment(base, ctx);
+    res.descricao = extractObject(base) ?? res.estabelecimento;
     const uc = matchUserCategory(text, ctx, tipo);
     const gc = guessCategory(text, tipo);
     if (gc && (!uc || (uc.categoria === gc.categoria && !uc.subcategoria))) {

@@ -6,6 +6,7 @@ export const INTENTS = [
   "QUERY_BUDGET", "QUERY_GOAL", "CREATE_GOAL", "CREATE_BUDGET", "EDIT_TRANSACTION", "DELETE_TRANSACTION",
   "CORRECT_CATEGORY", "FINANCIAL_ANALYSIS", "HELP", "GREETING", "OTHER",
   "PAY_INVOICE", "GOAL_CONTRIBUTE", "QUERY_RECURRING", "CANCEL_RECURRING", "QUERY_ALERTS",
+  "QUERY_DEBTS", "SETTLE_DEBT",
 ] as const;
 export type Intent = typeof INTENTS[number];
 
@@ -56,6 +57,9 @@ export interface Interpretation {
   frequencia?: "mensal" | "semanal" | "anual";
   dia?: number;                   // dia do mês (recorrência)
   dia_util?: number;              // n-ésimo dia útil (recorrência)
+  pessoa_id?: string;             // acerto: a outra pessoa da família
+  dividir?: boolean;              // compra dividida entre as pessoas da família
+  partes?: { membro: string; cartao?: string; cartao_do_membro?: boolean; conta?: string }[];  // cada parte paga de um jeito
   confidence: number;
   provider?: string;
   model?: string;

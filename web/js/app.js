@@ -235,25 +235,29 @@ function monthNav(onChange) {
 }
 
 async function dashboard(page) {
+  await loadBoot();
   const d = await api.rpc("app_dashboard", { mes: state.month, membro_id: state.membro });
   const current = d.mes === String(d.hoje).slice(0, 7);
   const resultado = d.receitas_cents - d.despesas_cents;
-  const projetado = Number(d.saldo_contas_cents) + Number(d.receitas_previstas_cents) - Number(d.compromissos_futuros_cents);
+  const aPagar = Number(d.acertos_a_pagar_cents || 0), aReceber = Number(d.acertos_a_receber_cents || 0);
+  const projetado = Number(d.saldo_contas_cents) + Number(d.receitas_previstas_cents) - Number(d.compromissos_futuros_cents) - aPagar + aReceber;
   const nome = state.boot.perfil?.nome;
   const mSel = family() && state.membro ? (state.membro === "familia" ? null : state.boot.familia.membros.find((m) => m.id === state.membro)) : undefined;
   const quem = !family() || !state.membro ? "" : state.membro === "familia" ? "da família (conjuntas)" : mSel?.eu ? "suas" : `de ${mSel?.nome?.split(" ")[0] ?? ""}`;
   page.innerHTML = `
     <div class="page-head"><h1>${current ? `Olá${nome ? `, ${esc(nome)}` : ""} 👋` : "Dashboard"}</h1><div class="row">${memberSeg(() => dashboard(page))}<span id="mnav"></span></div></div>
     ${current ? F2.alertsHtml(d.alertas) : ""}
-    <div class="grid kpis">
-      <div class="card kpi hero"><div class="label">Resultado do mês</div><div class="value num">${brl(resultado)}</div><div class="hint">receitas − despesas ${current ? "até hoje" : ""}</div></div>
-      <div class="card kpi"><div class="label">Receitas</div><div class="value num income">${brl(d.receitas_cents)}</div>${d.receitas_previstas_cents ? `<div class="hint">+ ${brl(d.receitas_previstas_cents)} previstas</div>` : ""}</div>
-      <div class="card kpi"><div class="label">Despesas</div><div class="value num expense">${brl(d.despesas_cents)}</div></div>
-      <div class="card kpi"><div class="label">Saldo em contas</div><div class="value num">${brl(d.saldo_contas_cents)}</div><div class="hint">${quem ? `contas ${quem}, hoje` : "hoje"}</div></div>
-      <div class="card kpi"><div class="label">Compromissos futuros</div><div class="value num">${brl(d.compromissos_futuros_cents)}</div><div class="hint">contas a pagar e faturas até o fim do mês</div></div>
-      ${d.faturas_mes_cents ? `<div class="card kpi"><div class="label">Faturas do mês</div><div class="value num">${brl(d.faturas_mes_cents)}</div><div class="hint"><a href="#/cartoes">ver cartões →</a></div></div>` : ""}
-      ${current ? `<div class="card kpi"><div class="label">Saldo projetado</div><div class="value num">${brl(projetado)}</div><div class="hint">estimativa p/ fim do mês</div></div>` : ""}
-      ${d.investimentos_cents ? `<div class="card kpi"><div class="label">Investimentos</div><div class="value num">${brl(d.investimentos_cents)}</div><div class="hint">aportes − resgates</div></div>` : ""}
+    <div id="acertos"></div>
+    <div class="grid kpis" id="kpis">
+      <button class="card kpi hero click" data-k="resultado"><div class="label">Resultado do mês</div><div class="value num">${brl(resultado)}</div><div class="hint">receitas − despesas ${current ? "até hoje" : ""}</div></button>
+      <button class="card kpi click" data-k="receitas"><div class="label">Receitas</div><div class="value num income">${brl(d.receitas_cents)}</div>${d.receitas_previstas_cents ? `<div class="hint">+ ${brl(d.receitas_previstas_cents)} previstas</div>` : ""}</button>
+      <button class="card kpi click" data-k="despesas"><div class="label">Despesas</div><div class="value num expense">${brl(d.despesas_cents)}</div></button>
+      <button class="card kpi click" data-k="saldo"><div class="label">Saldo em contas</div><div class="value num">${brl(d.saldo_contas_cents)}</div><div class="hint">${quem ? `contas ${quem}, hoje` : "hoje"}</div></button>
+      <button class="card kpi click" data-k="compromissos"><div class="label">Compromissos futuros</div><div class="value num">${brl(d.compromissos_futuros_cents)}</div><div class="hint">contas a pagar e faturas até o fim do mês</div></button>
+      ${d.faturas_mes_cents ? `<button class="card kpi click" data-k="faturas"><div class="label">Faturas do mês</div><div class="value num">${brl(d.faturas_mes_cents)}</div><div class="hint">${quem ? `cartões ${quem}` : "todos os cartões"}</div></button>` : ""}
+      ${aPagar || aReceber ? `<button class="card kpi click" data-k="acertos"><div class="label">Acertos (gastos divididos)</div><div class="value num ${aPagar > aReceber ? "expense" : "income"}">${brl(Math.abs(aPagar - aReceber))}</div><div class="hint">${aPagar > aReceber ? "a pagar" : "a receber"} no mês</div></button>` : ""}
+      ${current ? `<button class="card kpi click" data-k="projetado"><div class="label">Saldo projetado</div><div class="value num">${brl(projetado)}</div><div class="hint">estimativa p/ fim do mês</div></button>` : ""}
+      ${d.investimentos_cents ? `<button class="card kpi click" data-k="investimentos"><div class="label">Investimentos</div><div class="value num">${brl(d.investimentos_cents)}</div><div class="hint">aportes − resgates</div></button>` : ""}
     </div>
     <div class="grid two" style="margin-top:14px">
       <div class="card"><h2>Receitas × despesas</h2><div class="chart" id="c1"></div></div>
@@ -274,6 +278,8 @@ async function dashboard(page) {
     <div class="card" style="margin-top:14px"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Últimos lançamentos</h2><a href="#/lancamentos" class="small">Ver todos →</a></div>
       <div class="list" id="recent"></div></div>`;
   $("#mnav").appendChild(monthNav(() => dashboard(page)));
+  $("#kpis").onclick = (e) => { const b = e.target.closest("[data-k]"); if (b) F2.kpiDialog(b.dataset.k, d, { projetado, aPagar, aReceber, quem }, () => dashboard(page)); };
+  if (current && family()) F2.debtsCard($("#acertos"), () => dashboard(page));
   incomeExpenseChart($("#c1"), d.evolucao);
   if (d.por_categoria.length) categoryBars($("#c2"), d.por_categoria);
   else $("#c2").innerHTML = `<div class="empty">Nenhuma despesa neste mês.</div>`;
@@ -291,7 +297,8 @@ function txItem(t) {
     t.tipo === "pagamento_fatura" ? `${esc(t.conta)} → fatura ${esc(t.cartao)} · ${dateBR(t.data)}` :
     [family() && esc(memberLabel(t)), t.categoria && `${esc(t.categoria)}${t.subcategoria ? " › " + esc(t.subcategoria) : ""}`, onde, dateBR(t.data)].filter(Boolean).join(" · ");
   const icon = t.tipo === "transferencia" ? "🔁" : t.tipo === "investimento" ? "📈" : t.tipo === "resgate" ? "📥" : t.tipo === "pagamento_fatura" ? "💳" : t.icone || "•";
-  const prev = t.data > todayISO() ? ' <span class="tag">previsto</span>' : "";
+  const prev = (t.data > todayISO() ? ' <span class="tag">previsto</span>' : "") +
+    (t.acerto === "pendente" ? ` <span class="tag warn">a acertar${t.deve_para ? " c/ " + esc(t.deve_para.split(" ")[0]) : ""}</span>` : t.divisao_id ? ' <span class="tag">dividido</span>' : "");
   return `<div class="item click" data-id="${t.id}"><div class="emoji">${icon}</div>
     <div class="body"><div class="title">${esc(t.descricao)}${prev} ${t.origem === "whatsapp" ? '<span class="tag wa">WhatsApp</span>' : t.origem === "telegram" ? '<span class="tag tg">Telegram</span>' : t.origem === "recorrencia" ? '<span class="tag">fixa</span>' : t.origem === "importacao" ? '<span class="tag">importado</span>' : ""}</div><div class="sub">${sub}</div></div>
     <div class="amount num ${cls}">${sign} ${brl(Math.abs(t.valor_cents))}</div></div>`;
@@ -337,7 +344,8 @@ function txForm(t, after) {
       </div>
       ${family() ? `<div class="field memb-row"><label>De quem é?</label><select class="input" name="membro">
         ${b.familia.membros.map((m) => `<option value="${m.id}" ${(edit ? t.membro_id === m.id : m.eu) ? "selected" : ""}>${m.eu ? "Meu" : "De " + esc(m.nome)}</option>`).join("")}
-        <option value="familia" ${edit && t.membro_id === null ? "selected" : ""}>Família (compartilhado)</option></select></div>` : ""}
+        <option value="familia" ${edit && t.membro_id === null ? "selected" : ""}>Família (compartilhado)</option>
+        ${edit ? "" : `<option value="dividir">Dividir entre nós…</option>`}</select></div><div class="split-host hidden"></div>` : ""}
       ${edit && t.parcelas > 1 ? `<p class="small muted">Compra parcelada (${t.parcela}/${t.parcelas}): a categoria e a descrição mudam em todas as parcelas.</p>` : ""}
       ${edit && t.cartao_id ? `<p class="small muted">Compra no cartão ${esc(t.cartao)} — fatura de ${dateBR(t.fatura_vencimento)}.</p>` : ""}
       ${edit && !["app_form", "importacao", "recorrencia"].includes(t.origem) ? `<p class="small muted">Registrado pelo ${t.origem === "whatsapp" ? "WhatsApp" : t.origem === "telegram" ? "Telegram" : "assistente"}.</p>` : ""}
@@ -370,8 +378,18 @@ function txForm(t, after) {
       const c = b.categorias.find((x) => x.id === f.categoria_id.value);
       f.subcategoria_id.innerHTML = `<option value="">—</option>` + opts((c?.subcategorias || []).map((s) => [s.id, s.nome]), t?.subcategoria_id);
     };
-    f.tipo.onchange = fillCats; f.categoria_id.onchange = fillSubs;
+    f.tipo.onchange = () => { fillCats(); toggleSplit(); }; f.categoria_id.onchange = fillSubs;
     fillCats();
+    // dividir a compra entre as pessoas
+    const payDefault = () => f.conta_id.value.startsWith("k:") ? f.conta_id.value : "c:" + f.conta_id.value;
+    const split = f.membro && !edit ? F2.splitArea($(".split-host", m), payDefault) : null;
+    const isSplit = () => split && f.membro.value === "dividir" && f.tipo.value === "despesa";
+    const toggleSplit = () => { if (!split) return; $(".split-host", m).classList.toggle("hidden", !isSplit()); if (isSplit()) split.fill(parseMoney(f.valor.value)); };
+    if (split) {
+      f.membro.addEventListener("change", toggleSplit);
+      f.valor.addEventListener("input", () => isSplit() && split.fill(parseMoney(f.valor.value)));
+      f.conta_id.addEventListener("change", () => split.syncPay(payDefault()));
+    }
     $("#txCancel", m).onclick = close;
     if (edit) $("#txDel", m).onclick = async () => {
       if (!(await confirmBox(t.parcelas > 1 ? `Excluir as ${t.parcelas} parcelas desta compra?` : "Excluir este lançamento?", "Excluir", true))) return;
@@ -399,6 +417,22 @@ function txForm(t, after) {
       if (tp === "transferencia" && !edit) p.conta_destino_id = f.conta_destino_id.value;
       if (f.membro && (tp === "despesa" || tp === "receita")) p.membro = f.membro.value;
       if (forcar) p.forcar = true;
+      if (isSplit()) {
+        const partes = split.partes();
+        if (partes.some((x) => !(x.valor >= 0) || Number.isNaN(x.valor))) { err.textContent = "Informe o valor de cada parte."; err.classList.remove("hidden"); return; }
+        const soma = Math.round(partes.reduce((t, x) => t + x.valor, 0) * 100);
+        if (soma !== Math.round(p.valor * 100)) { err.textContent = `As partes somam ${brl(soma)}, mas a compra é de ${brl(Math.round(p.valor * 100))}.`; err.classList.remove("hidden"); return; }
+        delete p.membro; delete p.conta_id; delete p.cartao_id;
+        try {
+          const r = await api.rpc("app_save_split", { ...p, partes: partes.filter((x) => x.valor > 0) });
+          if (r.status === "needs_member_card") throw new Error(`${r.membro} não tem cartão cadastrado.`);
+          if (r.status !== "created") throw new Error("Não foi possível salvar a divisão. Confira os dados.");
+          const dev = r.partes.filter((x) => x.deve_para);
+          close(); toast(dev.length ? `Dividido ✅ ${dev.map((x) => `${x.membro.split(" ")[0]} fica devendo ${brl(x.valor_cents)}`).join(", ")}` : "Dividido ✅"); state.boot = null; after?.();
+        } catch (ex) { err.textContent = ex.message; err.classList.remove("hidden"); }
+        return;
+      }
+      if (p.membro === "dividir") delete p.membro;
       try {
         const r = await api.rpc("app_save_transaction", p);
         if (r.status === "possible_duplicate") {
