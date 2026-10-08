@@ -536,12 +536,12 @@ function cardHtml(c) {
 async function chat(page) {
   page.innerHTML = `
   <div class="chat-wrap">
-    <div class="chat-head"><div class="avatar">${logo(42)}</div><div><div class="name">Assistente</div><div class="small muted">Registre gastos e tire dúvidas — por texto ou voz</div></div></div>
+    <div class="chat-head"><div class="avatar">${logo(42)}</div><div><div class="name" id="assName">${esc(state.boot.perfil?.assistente || "Assistente")}</div><div class="small muted">${state.boot.perfil?.assistente ? "Seu assistente financeiro — por texto ou voz" : "Registre gastos e tire dúvidas — por texto ou voz"}</div></div></div>
     <div class="messages" id="msgs" aria-live="polite"></div>
     <div class="chips" id="chips">${SUGGESTIONS.map((s) => `<button>${esc(s)}</button>`).join("")}</div>
     <form class="composer" id="composer">
       <button type="button" class="round mic" id="mic" aria-label="Gravar áudio" title="Gravar áudio">${icon("mic", 21)}</button>
-      <textarea class="input" id="txt" rows="1" placeholder="Escreva ou fale…" maxlength="2000"></textarea>
+      <textarea class="input" id="txt" rows="1" placeholder="${state.boot.perfil?.assistente ? `Fale com ${esc(state.boot.perfil.assistente)}…` : "Escreva ou fale…"}" maxlength="2000"></textarea>
       <button class="round send" id="sendBtn" aria-label="Enviar">${icon("send", 20)}</button>
       <div class="recbar hidden" id="recbar" role="status">
         <button type="button" class="round" id="recCancel" aria-label="Cancelar gravação" title="Cancelar">${icon("close", 20)}</button>
@@ -554,7 +554,7 @@ async function chat(page) {
   const scroll = () => { box.scrollTop = box.scrollHeight; };
   const hist = await api.rpc("app_chat_history", { limite: 80 });
   box.innerHTML = hist.length ? hist.map(bubble).join("") :
-    bubble({ role: "assistant", content: `Olá${state.boot.perfil?.nome ? `, ${state.boot.perfil.nome}` : ""}! 👋 Sou seu assistente financeiro.\n\nMe conte seus gastos e receitas do jeito que você falaria, por exemplo:\n• “gastei 87,50 no supermercado”\n• “recebi 3 mil de salário”\n\nOu pergunte: “quanto gastei este mês?”` });
+    bubble({ role: "assistant", content: `Olá${state.boot.perfil?.nome ? `, ${state.boot.perfil.nome}` : ""}! 👋 Sou ${state.boot.perfil?.assistente ? `${state.boot.perfil.assistente}, ` : ""}seu assistente financeiro.\n\nMe conte seus gastos e receitas do jeito que você falaria, por exemplo:\n• “gastei 87,50 no supermercado”\n• “recebi 3 mil de salário”\n\nOu pergunte: “quanto gastei este mês?”` });
   scroll();
 
   let busy = false;
@@ -572,6 +572,12 @@ async function chat(page) {
       // áudio: troca o "transcrevendo…" pelo que foi entendido, com o botão para ouvir
       if (pid && r.transcricao) $("#" + pid)?.replaceWith(htmlEl(bubble({ role: "user", content: r.transcricao, channel: "app", message_type: "audio", audio_path: r.audio_path, created_at: new Date().toISOString() })));
       box.insertAdjacentHTML("beforeend", bubble({ role: "assistant", content: r.reply, cards: r.cards, created_at: new Date().toISOString() }));
+      const novoNome = /meu nome é \*([^*]+)\*/.exec(r.reply)?.[1] ?? (/voltei a ser só o \*Assistente\*/.test(r.reply) ? "" : null);
+      if (novoNome !== null) {
+        if (state.boot?.perfil) state.boot.perfil.assistente = novoNome || null;
+        $("#assName").textContent = novoNome || "Assistente";
+        txt.placeholder = novoNome ? `Fale com ${novoNome}…` : "Escreva ou fale…";
+      }
       if (/^CREATE|EDIT|DELETE|CORRECT|PAY|GOAL|CANCEL/.test(r.intent || "") || /Registrei|Apaguei|Pronto|criada|Guardei|Tirei/.test(r.reply)) state.boot = null;
     } catch (e) {
       $("#typing")?.remove();
@@ -780,6 +786,8 @@ async function settings(page) {
     <div class="grid two">
       <form class="card" id="pf"><h2>Perfil e meta</h2>
         <div class="field"><label>Seu nome</label><input class="input" name="nome" value="${esc(b.perfil?.nome || "")}"></div>
+        <div class="field"><label>Nome do assistente</label><input class="input" name="assistente" maxlength="30" placeholder="Ex.: Jarbas" value="${esc(b.perfil?.assistente || "")}">
+          <span class="small muted">Dê um nome ao seu assistente e chame por ele: “Jarbas, gastei 50 no mercado”. Também dá para pedir no chat: “seu nome agora é Jarbas”.</span></div>
         <div class="field"><label>Meta de economia ${family() ? "da família " : ""}por mês (R$)</label><input class="input num" name="meta" inputmode="decimal" placeholder="Ex.: 1.500,00" value="${moneyInput(b.perfil?.meta_economia_cents)}">
           <span class="small muted">Usada no cálculo de “quanto posso gastar”. Deixe vazio se não tiver meta.</span></div>
         <button class="btn primary">Salvar</button></form>
@@ -822,7 +830,7 @@ async function settings(page) {
     const meta = e.target.meta.value.trim();
     const v = meta ? parseMoney(meta) : "";
     if (meta && Number.isNaN(v)) return toast("Meta inválida");
-    try { await api.rpc("app_update_profile", { nome: e.target.nome.value, meta_economia: v === "" ? "" : String(v) }); toast("Salvo ✅"); state.boot = null; }
+    try { await api.rpc("app_update_profile", { nome: e.target.nome.value, assistente: e.target.assistente.value, meta_economia: v === "" ? "" : String(v) }); toast("Salvo ✅"); state.boot = null; }
     catch (ex) { toast(ex.message); }
   };
   $("#gen").onclick = async () => {

@@ -12,6 +12,7 @@ import { guessCategory } from "./categorizer.ts";
 import { extractAmount, findAmounts } from "./money.ts";
 import { resolveDate, addDays } from "./dates.ts";
 import { brl, dateBR, norm, pct } from "./text.ts";
+import { stripVocative, detectRename, asksName, validName } from "./naming.ts";
 
 export interface AssistantDeps {
   db: EngineDb;
@@ -69,17 +70,22 @@ const NO = /^(nao|n|cancela|cancelar|cancele|deixa|deixa pra la|esquece|nada|neg
 export async function handleMessage(msg: IncomingMessage, deps: AssistantDeps): Promise<AssistantReply> {
   const { db } = deps;
   const user = msg.user_id;
-  const content = msg.content.trim().slice(0, 2000);
+  let content = msg.content.trim().slice(0, 2000);
   const saved = await db.rpc<{ id: string }>("fe_chat_append", user, {
     role: "user", channel: msg.channel, content: content || "(áudio vazio)", message_type: msg.type, audio_provider: msg.audio_provider, audio_path: msg.audio_path,
   });
   const uc = await db.rpc<UserContext>("fe_context", user, {});
   const state = await db.rpc<{ pending: Pending | null }>("fe_chat_state", user, {});
+  // "Jarbas, gastei 50 no mercado" -> "gastei 50 no mercado"
+  const voc = stripVocative(content, uc.assistente);
+  if (voc.chamou) content = voc.text;
   const c: Ctx = { msg: { ...msg, content }, user, uc, deps };
 
   let out: Outcome | null = null;
   try {
     if (msg.document) out = await documentFlow(c);
+    if (!out && content) out = await namingFlow(c);
+    if (!out && !content && voc.chamou) out = { reply: `Oi${uc.nome ? `, ${uc.nome}` : ""}! Estou aqui. 👋 Pode falar: um gasto, um recebimento ou uma pergunta sobre suas finanças.` };
     if (!out && !content) out = { reply: "Não consegui entender o áudio. Pode repetir ou digitar?" };
     if (!out && state.pending) {
       out = await resolvePending(state.pending, c);
@@ -111,6 +117,32 @@ export async function handleMessage(msg: IncomingMessage, deps: AssistantDeps): 
   if (out.pending !== undefined) await db.rpc("fe_chat_state", user, { pending: out.pending });
   await db.rpc("fe_chat_append", user, { role: "assistant", channel: msg.channel, content: out.reply, cards: out.cards ?? null });
   return { reply: out.reply, cards: out.cards, intent: out.intent };
+}
+
+// ---------------------------------------------------------------------------
+// Nome do assistente ("seu nome agora é Jarbas", "qual é o seu nome?")
+// ---------------------------------------------------------------------------
+async function namingFlow(c: Ctx): Promise<Outcome | null> {
+  const texto = c.msg.content;
+  const pedido = detectRename(texto);
+  if (pedido === null) return { reply: "Que nome você quer me dar? Diga, por exemplo: “seu nome agora é Jarbas”." };
+  if (pedido !== undefined) {
+    if (pedido) {
+      const erro = validName(pedido);
+      if (erro) return { reply: `${erro} Diga, por exemplo: “seu nome agora é Jarbas”.` };
+    }
+    await c.deps.db.rpc("fe_admin", c.user, { acao: "perfil", dados: { assistente: pedido } });
+    c.uc.assistente = pedido || null;
+    return pedido
+      ? { reply: `Combinado! 😊 A partir de agora meu nome é *${pedido}*.\nPode me chamar assim aqui no app, no Telegram ou por áudio — por exemplo: “${pedido}, gastei 50 no mercado”.` }
+      : { reply: "Tudo bem, voltei a ser só o *Assistente*. Se quiser me dar um nome, é só dizer “seu nome agora é …”." };
+  }
+  if (asksName(texto) && texto.length < 60) {
+    return c.uc.assistente
+      ? { reply: `Meu nome é *${c.uc.assistente}*! 😊 Para mudar, diga “seu nome agora é …”.` }
+      : { reply: "Ainda não tenho nome — sou o seu assistente financeiro. Quer me dar um? Diga, por exemplo: “seu nome agora é Jarbas”." };
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +251,7 @@ async function dispatch(i: Interpretation, c: Ctx): Promise<Outcome> {
     case "GREETING":
       out = /obrigad|valeu|vlw|brigad/.test(norm(c.msg.content))
         ? { reply: "De nada! 😊 Estou por aqui quando precisar." }
-        : { reply: `Olá${c.uc.nome ? `, ${c.uc.nome}` : ""}! 👋 Me conte um gasto ou recebimento, ou pergunte sobre suas finanças.` };
+        : { reply: `Olá${c.uc.nome ? `, ${c.uc.nome}` : ""}! 👋 ${c.uc.assistente ? `Aqui é ${c.uc.assistente}. ` : ""}Me conte um gasto ou recebimento, ou pergunte sobre suas finanças.` };
       break;
     case "HELP": out = { reply: HELP }; break;
     case "ADMIN": out = await agentFlow(c, []); break;
@@ -249,6 +281,7 @@ const HELP = `Sou seu assistente financeiro. Basta conversar comigo:
 🧠 *Analisar*: “quanto posso gastar até o fim do mês?”, “como estão minhas finanças?”, “compare com o mês passado”, “posso comprar um celular de 1.800?”
 ✏️ *Corrigir*: “muda a categoria para lazer”, “apague o último lançamento”
 👨‍👩‍👧 *Família*: “gastamos 300 no mercado” (compartilhado), “quanto eu gastei?”, “quanto minha esposa gastou?”
+🏷️ *Meu nome*: “seu nome agora é Jarbas” — depois é só me chamar: “Jarbas, quanto gastei hoje?”
 
 Também entendo áudio — no app (🎙️), no WhatsApp e no Telegram.`;
 

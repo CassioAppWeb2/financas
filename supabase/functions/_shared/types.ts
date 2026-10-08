@@ -72,6 +72,7 @@ export interface UserContext {
   hoje: string;
   eu?: string;
   nome?: string;
+  assistente?: string | null;
   membros?: Member[];
   categorias: { tipo: "despesa" | "receita"; nome: string; icone?: string; subcategorias: string[] }[];
   contas: string[];
