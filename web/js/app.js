@@ -240,6 +240,8 @@ async function dashboard(page) {
   const resultado = d.receitas_cents - d.despesas_cents;
   const projetado = Number(d.saldo_contas_cents) + Number(d.receitas_previstas_cents) - Number(d.compromissos_futuros_cents);
   const nome = state.boot.perfil?.nome;
+  const mSel = family() && state.membro ? (state.membro === "familia" ? null : state.boot.familia.membros.find((m) => m.id === state.membro)) : undefined;
+  const quem = !family() || !state.membro ? "" : state.membro === "familia" ? "da família (conjuntas)" : mSel?.eu ? "suas" : `de ${mSel?.nome?.split(" ")[0] ?? ""}`;
   page.innerHTML = `
     <div class="page-head"><h1>${current ? `Olá${nome ? `, ${esc(nome)}` : ""} 👋` : "Dashboard"}</h1><div class="row">${memberSeg(() => dashboard(page))}<span id="mnav"></span></div></div>
     ${current ? F2.alertsHtml(d.alertas) : ""}
@@ -247,7 +249,7 @@ async function dashboard(page) {
       <div class="card kpi hero"><div class="label">Resultado do mês</div><div class="value num">${brl(resultado)}</div><div class="hint">receitas − despesas ${current ? "até hoje" : ""}</div></div>
       <div class="card kpi"><div class="label">Receitas</div><div class="value num income">${brl(d.receitas_cents)}</div>${d.receitas_previstas_cents ? `<div class="hint">+ ${brl(d.receitas_previstas_cents)} previstas</div>` : ""}</div>
       <div class="card kpi"><div class="label">Despesas</div><div class="value num expense">${brl(d.despesas_cents)}</div></div>
-      <div class="card kpi"><div class="label">Saldo em contas</div><div class="value num">${brl(d.saldo_contas_cents)}</div><div class="hint">hoje</div></div>
+      <div class="card kpi"><div class="label">Saldo em contas</div><div class="value num">${brl(d.saldo_contas_cents)}</div><div class="hint">${quem ? `contas ${quem}, hoje` : "hoje"}</div></div>
       <div class="card kpi"><div class="label">Compromissos futuros</div><div class="value num">${brl(d.compromissos_futuros_cents)}</div><div class="hint">contas a pagar e faturas até o fim do mês</div></div>
       ${d.faturas_mes_cents ? `<div class="card kpi"><div class="label">Faturas do mês</div><div class="value num">${brl(d.faturas_mes_cents)}</div><div class="hint"><a href="#/cartoes">ver cartões →</a></div></div>` : ""}
       ${current ? `<div class="card kpi"><div class="label">Saldo projetado</div><div class="value num">${brl(projetado)}</div><div class="hint">estimativa p/ fim do mês</div></div>` : ""}
@@ -304,6 +306,12 @@ function bindTxClicks(host, list, after) {
 }
 
 // ---------------------------------------------------------------- formulário de lançamento
+/** Conta sugerida: a padrão, se for da família ou minha; senão a minha primeira conta. */
+function defaultAccount(contas) {
+  const pad = contas.find((a) => a.padrao && a.status === "ativa");
+  if (!family() || !pad || pad.membro_id === null || pad.membro_id === meId()) return pad || contas[0];
+  return contas.find((a) => a.status === "ativa" && a.membro_id === meId() && a.tipo !== "investimento") || pad;
+}
 function txForm(t, after) {
   const b = state.boot, edit = Boolean(t?.id);
   const tipo0 = t?.tipo || "despesa";
@@ -323,7 +331,7 @@ function txForm(t, after) {
         <div class="field"><label>Subcategoria</label><select class="input" name="subcategoria_id"></select></div>
       </div>
       <div class="row">
-        <div class="field"><label class="lbl-conta">Conta</label><select class="input" name="conta_id" ${edit && t.cartao_id ? "disabled" : ""}>${opts([...contas.map((a) => [a.id, a.nome]), ...(edit && !t.cartao_id ? [] : (b.cartoes || []).map((k) => ["k:" + k.id, "💳 " + k.nome]))], t?.cartao_id ? "k:" + t.cartao_id : t?.conta_id || contas.find((a) => a.padrao)?.id)}</select></div>
+        <div class="field"><label class="lbl-conta">Conta</label><select class="input" name="conta_id" ${edit && t.cartao_id ? "disabled" : ""}>${opts([...contas.map((a) => [a.id, a.nome]), ...(edit && !t.cartao_id ? [] : (b.cartoes || []).map((k) => ["k:" + k.id, "💳 " + k.nome]))], t?.cartao_id ? "k:" + t.cartao_id : t?.conta_id || defaultAccount(contas)?.id)}</select></div>
         <div class="field dest-row"><label>Conta de destino</label><select class="input" name="conta_destino_id" ${edit ? "disabled" : ""}>${opts(contas.map((a) => [a.id, a.nome]), t?.conta_destino_id || contas.find((a) => !a.padrao)?.id)}</select></div>
         ${edit ? "" : `<div class="field parc-row"><label>Parcelas</label><input class="input num" name="parcelas" type="number" min="1" max="72" value="1"></div>`}
       </div>
@@ -588,7 +596,7 @@ async function accounts(page) {
       <div class="item click" data-id="${a.id}" style="${a.status === "arquivada" ? "opacity:.55" : ""}">
         <div class="emoji">${a.tipo === "dinheiro" ? "💵" : a.tipo === "poupanca" ? "🐷" : a.tipo === "investimento" ? "📈" : "🏦"}</div>
         <div class="body"><div class="title">${esc(a.nome)} ${a.padrao ? '<span class="tag">padrão</span>' : ""} ${a.status === "arquivada" ? '<span class="tag">arquivada</span>' : ""}</div>
-        <div class="sub">${esc(ACC_TYPES[a.tipo] || a.tipo)}${a.instituicao ? " · " + esc(a.instituicao) : ""}</div></div>
+        <div class="sub">${esc(ACC_TYPES[a.tipo] || a.tipo)}${a.instituicao ? " · " + esc(a.instituicao) : ""}${family() ? ` · ${a.membro_id === null ? "👨‍👩‍👧 Família" : a.membro_id === meId() ? "👤 Minha" : "👤 " + esc(a.membro)}` : ""}</div></div>
         <div class="amount num ${a.saldo_cents < 0 ? "expense" : ""}">${brl(a.saldo_cents)}</div></div>`).join("")}</div></div>
     <p class="small muted" style="margin-top:12px">A conta <b>padrão</b> é usada quando você não diz onde foi o gasto. Para usar outra, diga no chat: “paguei 50 no mercado com o Nubank”.</p>`;
   const reload = () => accounts(page);
@@ -607,6 +615,10 @@ function accForm(a, after) {
       </div>
       <div class="field"><label>Saldo inicial (R$)</label><input class="input num" name="saldo" inputmode="decimal" placeholder="0,00" value="${a ? "" : ""}">
         <span class="small muted">${a ? "Deixe em branco para manter o saldo inicial atual." : "Quanto havia na conta antes de começar a usar o app."}</span></div>
+      ${family() ? `<div class="field"><label>De quem é a conta?</label><select class="input" name="membro">
+        ${state.boot.familia.membros.map((m) => `<option value="${m.id}" ${(a ? a.membro_id === m.id : m.eu) ? "selected" : ""}>${m.eu ? "Minha" : "De " + esc(m.nome)}</option>`).join("")}
+        <option value="familia" ${a && a.membro_id === null ? "selected" : ""}>Da família (conjunta)</option></select>
+        <span class="small muted">No Início, ao escolher uma pessoa, o saldo mostra só as contas dela.</span></div>` : ""}
       <label class="row small" style="margin-bottom:12px"><input type="checkbox" name="padrao" ${a?.padrao ? "checked" : ""}> Usar como conta padrão</label>
       <p class="small expense hidden" id="aErr"></p>
       <div class="modal-actions">${a ? `<button type="button" class="btn" id="arch">${a.status === "ativa" ? "Arquivar" : "Reativar"}</button><span class="spacer"></span>` : ""}
@@ -620,6 +632,7 @@ function accForm(a, after) {
     f.onsubmit = async (e) => {
       e.preventDefault();
       const p = { id: a?.id, nome: f.nome.value.trim(), tipo: f.tipo.value, instituicao: f.instituicao.value.trim(), padrao: f.padrao.checked };
+      if (f.membro) p.membro = f.membro.value;
       if (f.saldo.value.trim()) {
         const v = parseMoney(f.saldo.value.replace(/^-/, ""));
         if (Number.isNaN(v)) { $("#aErr", m).textContent = "Saldo inválido."; $("#aErr", m).classList.remove("hidden"); return; }

@@ -110,6 +110,34 @@ describe("lançamentos e consultas família x individual", () => {
   });
 });
 
+describe("filtro por pessoa no painel", () => {
+  test("saldo, compromissos e faturas mostram só o que é da pessoa", async () => {
+    const card = await db.rpc<any>("fe_save_card", cassio, { nome: "Visa Cássio", fechamento: 28, vencimento: 31 });
+    void card;
+    await say(cassio, "gastei 120 no restaurante no cartão visa cássio");
+    const conta = await asUser<any>(ana, "app_save_account", { nome: "Conta Ana", tipo: "corrente", saldo_inicial: 300 });
+    expect(conta.status).toBe("ok");
+    const all = await asUser<any>(cassio, "app_dashboard", {});
+    const soAna = await asUser<any>(cassio, "app_dashboard", { membro_id: ana });
+    const soCassio = await asUser<any>(cassio, "app_dashboard", { membro_id: cassio });
+    expect(Number(soAna.saldo_contas_cents)).toBe(30000);
+    expect(soAna.por_conta.map((x: any) => x.nome)).toContain("Conta Ana");
+    expect(soAna.por_conta.every((x: any) => x.membro_id === ana)).toBe(true);
+    expect(Number(soAna.faturas_mes_cents)).toBe(0);
+    expect(Number(soCassio.saldo_contas_cents)).toBe(Number(all.saldo_contas_cents) - 30000);
+    expect(Number(soCassio.faturas_mes_cents)).toBe(Number(all.faturas_mes_cents));
+    const fam = await asUser<any>(cassio, "app_dashboard", { membro_id: "familia" });
+    expect(Number(fam.saldo_contas_cents)).toBe(0);
+    // gasto da Ana sem dizer a conta sai da conta dela, não da Carteira do Cássio
+    await say(ana, "gastei 10 na padaria");
+    const [{ dono }] = await q(`select a.member_id dono from transactions t join accounts a on a.id = t.account_id where t.created_by = $1 order by t.created_at desc limit 1`, ana);
+    expect(dono).toBe(ana);
+    // conta conjunta
+    await asUser<any>(ana, "app_save_account", { id: conta.id, nome: "Conta Ana", membro: "familia" });
+    expect(Number((await asUser<any>(cassio, "app_dashboard", { membro_id: "familia" })).saldo_contas_cents)).toBe(30000);
+  });
+});
+
 describe("isolamento e saída", () => {
   test("outra família não vê nada", async () => {
     expect((await say(outro, "quanto gastei esse mês?")).reply).toContain("Não encontrei");
