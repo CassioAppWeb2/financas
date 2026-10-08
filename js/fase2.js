@@ -1,6 +1,7 @@
 // Telas da Fase 2: Cartões e faturas, Contas fixas, Metas, Orçamentos, Relatórios e Importação de extrato.
 import { incomeExpenseChart, lineChart, categoryBars } from "./charts.js";
 import * as ex from "./export.js";
+import { icon } from "./icons.js";
 
 let C; // utilidades do app principal (injeção para evitar dependência circular)
 export function init(ctx) { C = ctx; }
@@ -48,8 +49,8 @@ export async function cardsView(page) {
   const total = cards.reduce((s, k) => s + Number(k.fatura_atual.total_cents), 0);
   page.innerHTML = `
     <div class="page-head"><h1>Cartões</h1><div class="row">
-      ${cards.length ? `<button class="btn" id="imp">⬆️ Importar fatura</button>` : ""}
-      <button class="btn primary" id="newCard">+ Novo cartão</button></div></div>
+      ${cards.length ? `<button class="btn" id="imp">${icon("upload", 17)} Importar fatura</button>` : ""}
+      <button class="btn primary" id="newCard">${icon("plus", 17)} Novo cartão</button></div></div>
     ${cards.length ? `<div class="grid kpis" style="margin-bottom:14px">
       <div class="card kpi"><div class="label">Faturas atuais</div><div class="value num">${C.brl(total)}</div><div class="hint">soma das faturas em aberto</div></div>
       <div class="card kpi"><div class="label">Limite disponível</div><div class="value num">${C.brl(cards.reduce((s, k) => s + Number(k.disponivel_cents ?? 0), 0))}</div><div class="hint">cartões com limite informado</div></div></div>` : ""}
@@ -67,9 +68,9 @@ export async function cardsView(page) {
         <div class="row" style="margin-top:12px">
           <button class="btn small primary" data-act="fatura">Ver fatura</button>
           ${pend || atual.situacao === "fechada" || atual.situacao === "vencida" ? `<button class="btn small" data-act="pagar">Pagar fatura</button>` : ""}
-          <span class="spacer"></span><button class="btn small ghost" data-act="edit">✏️ Editar</button></div>
+          <span class="spacer"></span><button class="btn small ghost" data-act="edit">${icon("edit", 16)} Editar</button></div>
       </div>`;
-    }).join("") || `<div class="card empty" style="grid-column:1/-1"><div class="big">💳</div><p><b>Nenhum cartão cadastrado.</b></p>
+    }).join("") || `<div class="card empty" style="grid-column:1/-1"><div class="big">${icon("card", 34)}</div><p><b>Nenhum cartão cadastrado.</b></p>
       <p class="muted">Cadastre seus cartões com o dia de fechamento e de vencimento. Depois é só dizer ao assistente “comprei uma TV de 3.000 em 10x no Nubank” que eu coloco cada parcela na fatura certa.</p></div>`}</div>
     <p class="small muted" style="margin-top:12px">Compras feitas <b>no dia do fechamento</b> ou depois entram na fatura seguinte. Pagar a fatura não conta como despesa nova — as compras já foram contadas quando você gastou.</p>`;
   const reload = () => cardsView(page);
@@ -132,7 +133,7 @@ function cardForm(k, after) {
 
 function invoiceDialog(k, due, after) {
   C.modal(`<div class="row" style="justify-content:space-between"><h2 style="margin:0">💳 ${C.esc(k.nome)}</h2>
-      <div class="month-nav"><button data-n="-1" aria-label="Fatura anterior">‹</button><span id="invTitle"></span><button data-n="1" aria-label="Próxima fatura">›</button></div></div>
+      <div class="month-nav"><button data-n="-1" aria-label="Fatura anterior">${icon("left", 18)}</button><span id="invTitle"></span><button data-n="1" aria-label="Próxima fatura">${icon("right", 18)}</button></div></div>
     <div id="invBody"><div class="empty">Carregando…</div></div>
     <div class="modal-actions"><button class="btn" id="invClose">Fechar</button><span class="spacer"></span><button class="btn primary hidden" id="invPay">Pagar esta fatura</button></div>`, (m, close) => {
     $("#invClose", m).onclick = close;
@@ -197,7 +198,7 @@ export async function recurringView(page) {
     <div class="amount num ${x.tipo === "receita" ? "income" : "expense"}">${C.brl(x.valor_cents)}</div></div>`;
   const rec = r.itens.filter((x) => x.tipo === "receita"), desp = r.itens.filter((x) => x.tipo === "despesa");
   page.innerHTML = `
-    <div class="page-head"><h1>Contas fixas</h1><button class="btn primary" id="newRec">+ Nova conta fixa</button></div>
+    <div class="page-head"><h1>Contas fixas</h1><button class="btn primary" id="newRec">${icon("plus", 17)} Nova conta fixa</button></div>
     <div class="grid kpis" style="margin-bottom:14px">
       <div class="card kpi"><div class="label">Receitas fixas / mês</div><div class="value num income">${C.brl(r.receitas_mes_cents)}</div></div>
       <div class="card kpi"><div class="label">Despesas fixas / mês</div><div class="value num expense">${C.brl(r.despesas_mes_cents)}</div></div>
@@ -205,7 +206,7 @@ export async function recurringView(page) {
     <div class="card" id="recList">
       ${rec.length ? `<h2>💰 Receitas</h2><div class="list">${rec.map(item).join("")}</div>` : ""}
       ${desp.length ? `<h2 ${rec.length ? 'style="margin-top:16px"' : ""}>🔄 Despesas</h2><div class="list">${desp.map(item).join("")}</div>` : ""}
-      ${!r.itens.length ? `<div class="empty"><div class="big">🔄</div><p><b>Nenhuma conta fixa.</b></p><p class="muted">Aluguel, internet, assinaturas, salário… Cadastre aqui ou diga ao assistente: “minha internet custa 120 todo dia 10”.</p></div>` : ""}
+      ${!r.itens.length ? `<div class="empty"><div class="big">${icon("repeat", 34)}</div><p><b>Nenhuma conta fixa.</b></p><p class="muted">Aluguel, internet, assinaturas, salário… Cadastre aqui ou diga ao assistente: “minha internet custa 120 todo dia 10”.</p></div>` : ""}
     </div>
     <p class="small muted" style="margin-top:12px">Os lançamentos são criados sozinhos até o fim do mês seguinte e aparecem como <b>previstos</b> até a data chegar.</p>`;
   const reload = () => recurringView(page);
@@ -310,11 +311,11 @@ export async function goalsView(page) {
       ${g.por_mes_cents && g.status === "ativa" ? `<br>Para chegar no prazo: <b class="num">${C.brl(g.por_mes_cents)}/mês</b> (${C.brl(g.por_semana_cents)}/semana)` : ""}
       ${g.ritmo_mensal_cents ? `<br>Seu ritmo: ${C.brl(g.ritmo_mensal_cents)}/mês` : ""}
       ${g.previsao && g.status === "ativa" ? `<br>Previsão de conclusão: <b>${C.dateBR(g.previsao)}</b> <span class="muted">(estimativa)</span>` : ""}</div>
-    ${g.status === "ativa" ? `<div class="row" style="margin-top:12px"><button class="btn small primary" data-act="add">+ Guardar</button><button class="btn small" data-act="sub">− Retirar</button><span class="spacer"></span><button class="btn small ghost" data-act="hist">Histórico</button><button class="btn small ghost" data-act="edit">✏️</button></div>`
-      : `<div class="row" style="margin-top:12px"><button class="btn small ghost" data-act="hist">Histórico</button><button class="btn small ghost" data-act="edit">✏️</button></div>`}
+    ${g.status === "ativa" ? `<div class="row" style="margin-top:12px"><button class="btn small primary" data-act="add">+ Guardar</button><button class="btn small" data-act="sub">− Retirar</button><span class="spacer"></span><button class="btn small ghost" data-act="hist">Histórico</button><button class="btn small ghost" data-act="edit">${icon("edit", 16)}</button></div>`
+      : `<div class="row" style="margin-top:12px"><button class="btn small ghost" data-act="hist">Histórico</button><button class="btn small ghost" data-act="edit">${icon("edit", 16)}</button></div>`}
   </div>`;
   page.innerHTML = `
-    <div class="page-head"><h1>Metas</h1><button class="btn primary" id="newGoal">+ Nova meta</button></div>
+    <div class="page-head"><h1>Metas</h1><button class="btn primary" id="newGoal">${icon("plus", 17)} Nova meta</button></div>
     <div class="grid two" id="goalList">${ativas.map(card).join("") || `<div class="card empty" style="grid-column:1/-1"><div class="big">🎯</div><p><b>Nenhuma meta ainda.</b></p><p class="muted">Ex.: juntar R$ 20.000 até dezembro para a viagem. Eu calculo quanto guardar por mês e acompanho a previsão. Também dá para dizer ao assistente: “guardei 500 na meta viagem”.</p></div>`}</div>
     ${outras.length ? `<details style="margin-top:16px"><summary class="small" style="cursor:pointer;font-weight:700">Concluídas e arquivadas (${outras.length})</summary><div class="grid two" style="margin-top:10px" id="goalOld">${outras.map(card).join("")}</div></details>` : ""}`;
   const reload = () => goalsView(page);
@@ -385,7 +386,7 @@ function goalHistory(g, after) {
   C.modal(`<h2>Histórico — ${C.esc(g.nome)}</h2>
     <div class="list" id="hl">${(g.aportes || []).map((a) => `<div class="item"><div class="emoji">${a.valor_cents > 0 ? "💰" : "↩️"}</div>
       <div class="body"><div class="title">${a.valor_cents > 0 ? "Guardado" : "Retirado"}</div><div class="sub">${C.dateBR(a.data)}${a.obs ? " · " + C.esc(a.obs) : ""}</div></div>
-      <div class="amount num ${a.valor_cents > 0 ? "income" : "expense"}">${C.brl(Math.abs(a.valor_cents))}</div><button class="btn ghost small" data-rm="${a.id}" title="Remover">🗑️</button></div>`).join("") || `<div class="empty">Nenhum valor registrado ainda.</div>`}</div>
+      <div class="amount num ${a.valor_cents > 0 ? "income" : "expense"}">${C.brl(Math.abs(a.valor_cents))}</div><button class="btn ghost small" data-rm="${a.id}" title="Remover">${icon("trash", 16)}</button></div>`).join("") || `<div class="empty">Nenhum valor registrado ainda.</div>`}</div>
     <div class="modal-actions"><button class="btn" id="hc">Fechar</button></div>`, (m, close) => {
     $("#hc", m).onclick = close;
     $("#hl", m).onclick = async (e) => {
@@ -416,7 +417,7 @@ export async function budgetsView(page) {
           <span class="num"><b>${C.brl(x.gasto_cents)}</b> de ${C.brl(x.limite_cents)}</span></div>
         <div class="pbar-wrap">${bar(x.percentual, SITC[x.situacao])}${current ? `<i class="pace" style="left:${Math.min(100, x.esperado_percentual)}%" title="Onde deveria estar hoje"></i>` : ""}</div>
         <div class="small muted">${Math.round(x.percentual)}% usado · ${x.restante_cents >= 0 ? `restam ${C.brl(x.restante_cents)}` : `passou ${C.brl(-x.restante_cents)}`}</div></div>`).join("")
-        || `<div class="empty"><div class="big">💵</div><p class="muted">Nenhum orçamento definido. Escolha uma categoria abaixo e defina um limite por mês — eu aviso quando chegar a 80% e quando passar.</p></div>`}
+        || `<div class="empty"><div class="big">${icon("budget", 34)}</div><p class="muted">Nenhum orçamento definido. Escolha uma categoria abaixo e defina um limite por mês — eu aviso quando chegar a 80% e quando passar.</p></div>`}
     </div>
     ${r.sem_orcamento.length ? `<div class="card" style="margin-top:14px" id="bFree"><h2>Sem orçamento</h2><div class="list">${r.sem_orcamento.map((x) => `
       <div class="item click" data-id="${x.categoria_id}"><div class="emoji">${x.icone || "•"}</div><div class="body"><div class="title">${C.esc(x.categoria)}</div><div class="sub">gasto no mês: ${C.brl(x.gasto_cents)}</div></div><span class="btn small">Definir</span></div>`).join("")}</div></div>` : ""}
@@ -479,7 +480,7 @@ export async function reportsView(page) {
   void membros;
   page.innerHTML = `
     <div class="page-head no-print"><h1>Relatórios</h1><div class="row">
-      <button class="btn" id="xCsv">⬇️ CSV</button><button class="btn" id="xXls">⬇️ Excel</button><button class="btn" id="xPdf">⬇️ PDF</button></div></div>
+      <button class="btn" id="xCsv">${icon("download", 17)} CSV</button><button class="btn" id="xXls">${icon("download", 17)} Excel</button><button class="btn" id="xPdf">${icon("download", 17)} PDF</button></div></div>
     <div class="card no-print" style="margin-bottom:14px"><div class="row">
       <div class="seg" id="modo"><button data-v="mes" class="${rep.modo === "mes" ? "on" : ""}">Mês</button><button data-v="ano" class="${rep.modo === "ano" ? "on" : ""}">Ano</button><button data-v="periodo" class="${rep.modo === "periodo" ? "on" : ""}">Período</button></div>
       <span id="pnav"></span>
@@ -516,7 +517,7 @@ export async function reportsView(page) {
   const pnav = $("#pnav");
   if (rep.modo === "mes") pnav.appendChild(C.monthNav(() => reportsView(page)));
   if (rep.modo === "ano") {
-    pnav.innerHTML = `<div class="month-nav"><button aria-label="Ano anterior">‹</button><span>${anoAtual}</span><button aria-label="Próximo ano">›</button></div>`;
+    pnav.innerHTML = `<div class="month-nav"><button aria-label="Ano anterior">${icon("left", 18)}</button><span>${anoAtual}</span><button aria-label="Próximo ano">${icon("right", 18)}</button></div>`;
     const [a, b] = $$("button", pnav);
     a.onclick = () => { rep.ano = String(+anoAtual - 1); reportsView(page); };
     b.onclick = () => { rep.ano = String(+anoAtual + 1); reportsView(page); };
@@ -691,7 +692,7 @@ export function alertsHtml(alertas) {
   alertas = (alertas || []).filter((a) => a.tipo !== "acerto");   // os acertos têm um quadro próprio
   if (!alertas.length) return "";
   const cls = { alto: "bad", medio: "warn", bom: "ok" };
-  return `<div class="card alerts" style="margin-bottom:14px"><h2>🔔 Alertas</h2>${alertas.map((a) => `<div class="alert ${cls[a.nivel] || ""}"><span>${a.icone}</span><span>${C.esc(a.texto)}</span></div>`).join("")}</div>`;
+  return `<div class="card alerts" style="margin-bottom:14px"><h2 class="h-ico">${icon("bell", 18)} Alertas</h2>${alertas.map((a) => `<div class="alert ${cls[a.nivel] || ""}"><span>${a.icone}</span><span>${C.esc(a.texto)}</span></div>`).join("")}</div>`;
 }
 
 // =====================================================================

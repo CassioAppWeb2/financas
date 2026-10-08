@@ -2,6 +2,7 @@
 import * as api from "./api.js";
 import { brl, incomeExpenseChart, lineChart, categoryBars } from "./charts.js";
 import * as F2 from "./fase2.js";
+import { icon, logo } from "./icons.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -86,31 +87,31 @@ function confirmBox(text, okLabel = "Confirmar", danger = false) {
 
 // ---------------------------------------------------------------- navegação
 const NAV = [
-  { href: "#/", ico: "🏠", label: "Dashboard", short: "Início" },
-  { href: "#/assistente", ico: "💬", label: "Assistente", short: "Assistente" },
-  { href: "#/lancamentos", ico: "💰", label: "Lançamentos", short: "Lançamentos" },
-  { href: "#/contas", ico: "🏦", label: "Contas", short: "Contas" },
-  { href: "#/cartoes", ico: "💳", label: "Cartões" },
-  { href: "#/relatorios", ico: "📊", label: "Relatórios" },
-  { href: "#/metas", ico: "🎯", label: "Metas" },
-  { href: "#/orcamentos", ico: "💵", label: "Orçamentos" },
-  { href: "#/fixas", ico: "🔄", label: "Contas fixas" },
-  { href: "#/categorias", ico: "🏷️", label: "Categorias" },
-  { href: "#/configuracoes", ico: "⚙️", label: "Configurações" },
+  { href: "#/", ico: "home", label: "Dashboard", short: "Início" },
+  { href: "#/assistente", ico: "chat", label: "Assistente", short: "Assistente" },
+  { href: "#/lancamentos", ico: "list", label: "Lançamentos", short: "Lançamentos" },
+  { href: "#/contas", ico: "bank", label: "Contas", short: "Contas" },
+  { href: "#/cartoes", ico: "card", label: "Cartões" },
+  { href: "#/relatorios", ico: "chart", label: "Relatórios" },
+  { href: "#/metas", ico: "target", label: "Metas" },
+  { href: "#/orcamentos", ico: "budget", label: "Orçamentos" },
+  { href: "#/fixas", ico: "repeat", label: "Contas fixas" },
+  { href: "#/categorias", ico: "tag", label: "Categorias" },
+  { href: "#/configuracoes", ico: "settings", label: "Configurações" },
 ];
-const BOTTOM = [NAV[0], NAV[1], NAV[2], NAV[3], { href: "#/mais", ico: "☰", short: "Mais" }];
+const BOTTOM = [NAV[0], NAV[1], NAV[2], NAV[3], { href: "#/mais", ico: "more", short: "Mais" }];
 
 function shell(route) {
   const active = (h) => (h === "#/" ? route === "" : route.startsWith(h.slice(2)) && h !== "#/") ? "active" : "";
   root.innerHTML = `
   <div class="app">
     <nav class="sidebar" aria-label="Menu">
-      <div class="brand"><img class="brand-mark" src="icons/icon-192.png" alt="">Assistente Financeiro</div>
-      ${NAV.map((n) => `<a class="nav-link ${active(n.href)}" href="${n.href}"><span class="ico">${n.ico}</span>${n.label}</a>`).join("")}
+      <div class="brand">${logo(34)}<div><div class="brand-name">Finanças</div><div class="brand-sub">Assistente da casa</div></div></div>
+      ${NAV.map((n) => `<a class="nav-link ${active(n.href)}" href="${n.href}"><span class="ico">${icon(n.ico, 19)}</span>${n.label}</a>`).join("")}
     </nav>
     <main class="main" id="page"></main>
     <nav class="bottom-nav" aria-label="Menu">
-      ${BOTTOM.map((n) => `<a class="${n.href === "#/mais" ? (["mais", "categorias", "configuracoes", "cartoes", "relatorios", "metas", "orcamentos", "fixas"].some((r) => route.startsWith(r)) ? "active" : "") : active(n.href)}" href="${n.href}"><span class="ico">${n.ico}</span>${n.short}</a>`).join("")}
+      ${BOTTOM.map((n) => `<a class="${n.href === "#/mais" ? (["mais", "categorias", "configuracoes", "cartoes", "relatorios", "metas", "orcamentos", "fixas"].some((r) => route.startsWith(r)) ? "active" : "") : active(n.href)}" href="${n.href}"><span class="ico">${icon(n.ico, 22)}</span>${n.short}</a>`).join("")}
     </nav>
   </div>`;
   return $("#page");
@@ -143,7 +144,7 @@ async function router(opts) {
     else location.hash = "#/";
     if (silent && !route.startsWith("assistente")) { window.scrollTo(0, y); page.scrollTop = py; }
   } catch (e) {
-    if (!silent) page.innerHTML = `<div class="empty"><div class="big">⚠️</div><p>${esc(e.message)}</p><button class="btn" onclick="location.reload()">Tentar de novo</button></div>`;
+    if (!silent) page.innerHTML = `<div class="empty"><div class="big">${icon("bell", 34)}</div><p>${esc(e.message)}</p><button class="btn" onclick="location.reload()">Tentar de novo</button></div>`;
   }
 }
 
@@ -179,7 +180,7 @@ window.addEventListener("focus", () => checkChanges());
 
 // ---------------------------------------------------------------- telas sem login
 function setupView() {
-  root.innerHTML = `<div class="auth"><div class="card"><img class="brand-mark" src="icons/icon-192.png" alt=""><h1>Quase pronto</h1>
+  root.innerHTML = `<div class="auth"><div class="card">${logo(48)}<h1>Quase pronto</h1>
   <p class="lead">Preencha <code>web/js/config.js</code> com a URL e a chave pública do seu projeto Supabase. As instruções estão no README.</p></div></div>`;
 }
 
@@ -187,7 +188,7 @@ function authView(mode = "entrar") {
   const signup = mode === "criar";
   root.innerHTML = `
   <div class="auth"><form class="card" id="authForm" novalidate>
-    <img class="brand-mark" src="icons/icon-192.png" alt="">
+    ${logo(48)}
     <h1>${signup ? "Criar sua conta" : "Bem-vindo de volta"}</h1>
     <p class="lead">${signup ? "Controle suas finanças só conversando." : "Entre para falar com seu assistente financeiro."}</p>
     ${signup ? `<div class="field"><label for="name">Seu nome</label><input class="input" id="name" autocomplete="name" required></div>` : ""}
@@ -210,7 +211,7 @@ function authView(mode = "entrar") {
       if (signup) {
         const r = await api.signUp($("#name").value.trim(), email, pass);
         if (r.confirm) {
-          root.innerHTML = `<div class="auth"><div class="card"><div class="brand-mark">✉️</div><h1>Confirme seu e-mail</h1>
+          root.innerHTML = `<div class="auth"><div class="card"><div class="brand-mark">${icon("chat", 24)}</div><h1>Confirme seu e-mail</h1>
           <p class="lead">Enviamos um link para <b>${esc(email)}</b>. Depois de confirmar, volte aqui e entre.</p>
           <button class="btn primary" onclick="location.reload()">Ir para o login</button></div></div>`;
           return;
@@ -228,7 +229,7 @@ function authView(mode = "entrar") {
 function monthNav(onChange) {
   const wrap = document.createElement("div");
   wrap.className = "month-nav";
-  wrap.innerHTML = `<button aria-label="Mês anterior">‹</button><span>${monthTitle(state.month)}</span><button aria-label="Próximo mês">›</button>`;
+  wrap.innerHTML = `<button aria-label="Mês anterior">${icon("left", 18)}</button><span>${monthTitle(state.month)}</span><button aria-label="Próximo mês">${icon("right", 18)}</button>`;
   const [prev, next] = $$("button", wrap);
   prev.onclick = () => { state.month = shiftMonth(state.month, -1); onChange(); };
   next.onclick = () => { state.month = shiftMonth(state.month, 1); onChange(); };
@@ -246,7 +247,7 @@ async function dashboard(page) {
   const mSel = family() && state.membro ? (state.membro === "familia" ? null : state.boot.familia.membros.find((m) => m.id === state.membro)) : undefined;
   const quem = !family() || !state.membro ? "" : state.membro === "familia" ? "da família (conjuntas)" : mSel?.eu ? "suas" : `de ${mSel?.nome?.split(" ")[0] ?? ""}`;
   page.innerHTML = `
-    <div class="page-head"><h1>${current ? `Olá${nome ? `, ${esc(nome)}` : ""} 👋` : "Dashboard"}</h1><div class="row">${memberSeg(() => dashboard(page))}<span id="mnav"></span></div></div>
+    <div class="page-head"><h1>${current ? `Olá${nome ? `, ${esc(nome)}` : ""} ` : "Dashboard"}</h1><div class="row">${memberSeg(() => dashboard(page))}<span id="mnav"></span></div></div>
     ${current ? F2.alertsHtml(d.alertas) : ""}
     <div id="acertos"></div>
     <div class="grid kpis" id="kpis">
@@ -286,7 +287,7 @@ async function dashboard(page) {
   else $("#c2").innerHTML = `<div class="empty">Nenhuma despesa neste mês.</div>`;
   lineChart($("#c3"), d.evolucao.map((e) => ({ label: MESES[+e.mes.slice(5, 7) - 1].slice(0, 3), value: Number(e.patrimonio_cents) })));
   $("#recent").innerHTML = d.recentes.length ? d.recentes.map(txItem).join("") :
-    `<div class="empty"><div class="big">💬</div>Nada lançado ainda. Vá ao <a href="#/assistente">Assistente</a> e diga, por exemplo, “gastei 50 na padaria”.</div>`;
+    `<div class="empty"><div class="big">${icon("chat", 34)}</div>Nada lançado ainda. Vá ao <a href="#/assistente">Assistente</a> e diga, por exemplo, “gastei 50 na padaria”.</div>`;
   bindTxClicks($("#recent"), d.recentes, () => dashboard(page));
 }
 
@@ -454,7 +455,7 @@ async function transactions(page) {
   const filt = { tipo: "", categoria_id: "", busca: "" };
   const memberSel = family() ? `<select class="input" id="fMemb" style="max-width:190px"><option value="">Todas as pessoas</option>${state.boot.familia.membros.map((m) => `<option value="${m.id}">${m.eu ? "Eu" : esc(m.nome)}</option>`).join("")}<option value="familia">Compartilhado</option></select>` : "";
   page.innerHTML = `
-    <div class="page-head"><h1>Lançamentos</h1><div class="row"><span id="mnav"></span><button class="btn" id="imp">⬆️ Importar</button><button class="btn" id="csv">⬇️ CSV</button></div></div>
+    <div class="page-head"><h1>Lançamentos</h1><div class="row"><span id="mnav"></span><button class="btn" id="imp">${icon("upload", 17)} Importar</button><button class="btn" id="csv">${icon("download", 17)} CSV</button></div></div>
     <div class="card" style="margin-bottom:14px">
       <div class="row">
         <div class="seg" id="segTipo"><button data-v="" class="on">Todos</button><button data-v="despesa">Despesas</button><button data-v="receita">Receitas</button></div>
@@ -465,7 +466,7 @@ async function transactions(page) {
       <p class="small muted" id="summary" style="margin:12px 0 0"></p>
     </div>
     <div class="card"><div class="list" id="txList"></div></div>
-    <button class="fab" id="fab" aria-label="Novo lançamento">+</button>`;
+    <button class="fab" id="fab" aria-label="Novo lançamento">${icon("plus", 26)}</button>`;
   let data = [];
   const load = async (quiet = false) => {
     if (!quiet) $("#txList").innerHTML = `<div class="empty">Carregando…</div>`;
@@ -474,7 +475,7 @@ async function transactions(page) {
     const rec = data.filter((t) => t.tipo === "receita").reduce((s, t) => s + t.valor_cents, 0);
     const desp = data.filter((t) => t.tipo === "despesa").reduce((s, t) => s + t.valor_cents, 0);
     $("#summary").innerHTML = `${data.length} lançamentos · Receitas <b class="income num">${brl(rec)}</b> · Despesas <b class="expense num">${brl(desp)}</b>`;
-    if (!data.length) { $("#txList").innerHTML = `<div class="empty"><div class="big">🗂️</div>Nenhum lançamento em ${monthTitle(state.month)}.</div>`; return; }
+    if (!data.length) { $("#txList").innerHTML = `<div class="empty"><div class="big">${icon("list", 34)}</div>Nenhum lançamento em ${monthTitle(state.month)}.</div>`; return; }
     let html = "", day = "";
     for (const t of data) {
       if (t.data !== day) { day = t.data; html += `<div class="day-label">${new Date(day + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</div>`; }
@@ -513,8 +514,8 @@ const SUGGESTIONS = ["Quanto gastei este mês?", "Quanto posso gastar até o fim
 function bubble(m) {
   const time = m.created_at ? new Date(m.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
   const cards = (m.cards || []).map(cardHtml).join("");
-  const play = m.audio_path ? `<button type="button" class="audio-btn" data-audio="${esc(m.audio_path)}">▶ Ouvir áudio</button>` : "";
-  return `<div class="msg ${m.role}"${m.pid ? ` id="${m.pid}"` : ""}><div class="txt">${md(m.content)}</div>${play}${cards}<div class="meta">${m.channel === "whatsapp" ? '<span class="tag wa">WhatsApp</span>' : m.channel === "telegram" ? '<span class="tag tg">Telegram</span>' : ""}${m.message_type === "audio" && m.role === "user" ? "🎙️" : ""}<span>${time}</span></div></div>`;
+  const play = m.audio_path ? `<button type="button" class="audio-btn" data-audio="${esc(m.audio_path)}">${icon("play", 14)} Ouvir áudio</button>` : "";
+  return `<div class="msg ${m.role}"${m.pid ? ` id="${m.pid}"` : ""}><div class="txt">${md(m.content)}</div>${play}${cards}<div class="meta">${m.channel === "whatsapp" ? '<span class="tag wa">WhatsApp</span>' : m.channel === "telegram" ? '<span class="tag tg">Telegram</span>' : ""}${m.message_type === "audio" && m.role === "user" ? icon("mic", 13) : ""}<span>${time}</span></div></div>`;
 }
 function cardHtml(c) {
   if (c.type === "transaction" && c.data) {
@@ -535,17 +536,17 @@ function cardHtml(c) {
 async function chat(page) {
   page.innerHTML = `
   <div class="chat-wrap">
-    <div class="chat-head"><div class="avatar">🤖</div><div><div class="name">Assistente</div><div class="small muted">Registre gastos e tire dúvidas — por texto ou voz</div></div></div>
+    <div class="chat-head"><div class="avatar">${logo(42)}</div><div><div class="name">Assistente</div><div class="small muted">Registre gastos e tire dúvidas — por texto ou voz</div></div></div>
     <div class="messages" id="msgs" aria-live="polite"></div>
     <div class="chips" id="chips">${SUGGESTIONS.map((s) => `<button>${esc(s)}</button>`).join("")}</div>
     <form class="composer" id="composer">
-      <button type="button" class="round mic" id="mic" aria-label="Gravar áudio" title="Gravar áudio">🎙️</button>
-      <textarea class="input" id="txt" rows="1" placeholder="Digite ou toque no 🎙️ para falar" maxlength="2000"></textarea>
-      <button class="round send" id="sendBtn" aria-label="Enviar">➤</button>
+      <button type="button" class="round mic" id="mic" aria-label="Gravar áudio" title="Gravar áudio">${icon("mic", 21)}</button>
+      <textarea class="input" id="txt" rows="1" placeholder="Escreva ou fale…" maxlength="2000"></textarea>
+      <button class="round send" id="sendBtn" aria-label="Enviar">${icon("send", 20)}</button>
       <div class="recbar hidden" id="recbar" role="status">
-        <button type="button" class="round" id="recCancel" aria-label="Cancelar gravação" title="Cancelar">✕</button>
+        <button type="button" class="round" id="recCancel" aria-label="Cancelar gravação" title="Cancelar">${icon("close", 20)}</button>
         <span class="rec-dot"></span><span class="num" id="recTime">0:00</span><span class="small muted rec-hint">Gravando… fale o gasto ou a pergunta</span>
-        <button type="button" class="round send" id="recSend" aria-label="Enviar áudio" title="Enviar">➤</button>
+        <button type="button" class="round send" id="recSend" aria-label="Enviar áudio" title="Enviar">${icon("send", 20)}</button>
       </div>
     </form>
   </div>`;
@@ -593,14 +594,14 @@ async function chat(page) {
       el.controls = true; el.autoplay = true; el.src = url; el.className = "audio-player";
       el.onerror = () => toast("Não foi possível tocar este áudio neste aparelho.");
       b.replaceWith(el);
-    } catch (x) { b.disabled = false; b.textContent = "▶ Ouvir áudio"; toast(x.message.includes("not_found") || x.message.includes("404") ? "Este áudio não está mais disponível (guardamos por 7 dias)." : x.message); }
+    } catch (x) { b.disabled = false; b.innerHTML = `${icon("play", 14)} Ouvir áudio`; toast(x.message.includes("not_found") || x.message.includes("404") ? "Este áudio não está mais disponível (guardamos por 7 dias)." : x.message); }
   });
   setupMic(send);
 }
 
 /**
  * Microfone: grava o áudio no celular/computador e envia ao servidor, que transcreve (Groq/Gemini) —
- * o mesmo caminho dos áudios do Telegram. Toque para gravar; ➤ envia, ✕ cancela. Máximo de 2 minutos.
+ * o mesmo caminho dos áudios do Telegram. Toque para gravar; enviar ou cancelar. Máximo de 2 minutos.
  */
 function setupMic(send) {
   const btn = $("#mic"), bar = $("#recbar"), timeEl = $("#recTime");
@@ -630,7 +631,7 @@ function setupMic(send) {
       const dur = Date.now() - started, type = (mr.mimeType || mime || "audio/webm").split(";")[0];
       mr = null; stopAll();
       if (cancelled) return;
-      if (dur < 700 || !chunks.length) { toast("Áudio muito curto. Toque no 🎙️, fale e depois toque em ➤."); return; }
+      if (dur < 700 || !chunks.length) { toast("Áudio muito curto. Toque no microfone, fale e depois toque em enviar."); return; }
       const blob = new Blob(chunks, { type });
       const b64 = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.readAsDataURL(blob); });
       send("", "audio", { audio_base64: b64, mime: type, label: `🎙️ Áudio (${fmt(dur)}) — transcrevendo…` });
@@ -653,7 +654,7 @@ async function accounts(page) {
   const b = await loadBoot(true);
   const list = b.contas.contas;
   page.innerHTML = `
-    <div class="page-head"><h1>Contas</h1><div class="row"><button class="btn" id="impAcc">⬆️ Importar extrato</button><button class="btn primary" id="newAcc">+ Nova conta</button></div></div>
+    <div class="page-head"><h1>Contas</h1><div class="row"><button class="btn" id="impAcc">${icon("upload", 17)} Importar extrato</button><button class="btn primary" id="newAcc">${icon("plus", 17)} Nova conta</button></div></div>
     <div class="card kpi" style="margin-bottom:14px"><div class="label">Saldo total (contas ativas)</div><div class="value num">${brl(b.contas.total_cents)}</div><div class="hint">Calculado pelos lançamentos até hoje</div></div>
     <div class="card"><div class="list" id="accList">${list.map((a) => `
       <div class="item click" data-id="${a.id}" style="${a.status === "arquivada" ? "opacity:.55" : ""}">
@@ -712,14 +713,14 @@ async function categories(page, kind = "despesa") {
   const b = await loadBoot(true);
   const cats = b.categorias.filter((c) => c.tipo === kind);
   page.innerHTML = `
-    <div class="page-head"><h1>Categorias</h1><button class="btn primary" id="newCat">+ Nova categoria</button></div>
+    <div class="page-head"><h1>Categorias</h1><button class="btn primary" id="newCat">${icon("plus", 17)} Nova categoria</button></div>
     <div class="seg" id="kind" style="margin-bottom:14px"><button data-v="despesa" class="${kind === "despesa" ? "on" : ""}">Despesas</button><button data-v="receita" class="${kind === "receita" ? "on" : ""}">Receitas</button></div>
     <div class="card">${cats.map((c) => `
       <div class="cat-block" data-id="${c.id}">
         <div class="cat-head"><div class="emoji" style="width:36px;height:36px;border-radius:10px;background:var(--surface-2);display:grid;place-items:center">${c.icone || "🏷️"}</div>
           <span class="t">${esc(c.nome)}</span>
-          <button class="btn ghost icon small" data-act="edit" title="Renomear">✏️</button>
-          ${c.sistema ? "" : `<button class="btn ghost icon small" data-act="del" title="Excluir">🗑️</button>`}</div>
+          <button class="btn ghost icon small" data-act="edit" title="Renomear">${icon("edit", 17)}</button>
+          ${c.sistema ? "" : `<button class="btn ghost icon small" data-act="del" title="Excluir">${icon("trash", 17)}</button>`}</div>
         <div class="subs">${c.subcategorias.map((s) => `<span class="sub-chip">${esc(s.nome)}<button data-sub="${s.id}" title="Remover">×</button></span>`).join("")}
           <button class="btn ghost small" data-act="addsub" style="padding:4px 8px">+ subcategoria</button></div>
       </div>`).join("")}</div>
@@ -875,7 +876,7 @@ async function settings(page) {
 // ---------------------------------------------------------------- MAIS
 function more(page) {
   page.innerHTML = `<div class="page-head"><h1>Mais</h1></div><div class="card"><div class="list">
-    ${NAV.slice(4).map((n) => `<a class="item click" href="${n.href}" style="text-decoration:none;color:inherit"><div class="emoji">${n.ico}</div><div class="body"><div class="title">${n.label}</div></div>›</a>`).join("")}
+    ${NAV.slice(4).map((n) => `<a class="item click" href="${n.href}" style="text-decoration:none;color:inherit"><div class="emoji nav-ico">${icon(n.ico, 20)}</div><div class="body"><div class="title">${n.label}</div></div>›</a>`).join("")}
   </div></div>`;
 }
 
