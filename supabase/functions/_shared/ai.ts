@@ -190,6 +190,8 @@ async function whisper(url: string, key: string, model: string, bytes: Uint8Arra
   form.append("file", new Blob([bytes as unknown as ArrayBuffer], { type: mime }), "audio." + (mime.split("/")[1]?.split(";")[0] || "ogg"));
   form.append("model", model);
   form.append("language", "pt");
+  // contexto: ajuda o reconhecimento de valores ("mil reais", "R$ 1.250,00") e termos de finanças
+  form.append("prompt", "Mensagem de controle financeiro em português do Brasil, com valores em reais. Exemplos: gastei mil reais no mercado; paguei R$ 1.250,00 no cartão Nubank; recebi 3 mil de salário; comprei um computador de 2.500 reais dividido em dois cartões.");
   const r = await f(url, { method: "POST", headers: { authorization: `Bearer ${key}` }, body: form, signal: AbortSignal.timeout(30000) });
   if (!r.ok) throw new Error(`Whisper ${r.status}: ${(await r.text()).slice(0, 200)}`);
   return String((await r.json()).text ?? "").trim();

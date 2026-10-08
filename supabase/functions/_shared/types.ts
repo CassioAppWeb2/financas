@@ -20,6 +20,7 @@ export interface IncomingMessage {
   content: string;          // texto digitado ou transcrição do áudio
   timestamp: string;
   audio_provider?: string;
+  audio_path?: string;      // áudio guardado no Storage (7 dias)
   media_ref?: string;
   document?: { bytes: Uint8Array; mime: string; name?: string };  // PDF/foto de fatura ou extrato
 }

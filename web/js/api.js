@@ -70,4 +70,11 @@ export async function signOut() {
 }
 export const rpc = (fn, p = {}) => call(`/rest/v1/rpc/${fn}`, { body: { p } });
 export const ask = (payload) => call("/functions/v1/assistant", { body: payload });
+/** Link temporário (1 h) para ouvir um áudio guardado — só o dono consegue gerar. */
+export async function audioUrl(path) {
+  const r = await call(`/storage/v1/object/sign/audios/${path.split("/").map(encodeURIComponent).join("/")}`, { body: { expiresIn: 3600 } });
+  const signed = r?.signedURL || r?.signedUrl;
+  if (!signed) throw new Error("Áudio indisponível.");
+  return BASE + "/storage/v1" + signed;
+}
 export const configured = () => Boolean(cfg.SUPABASE_URL) || location.hostname === "localhost" || location.hostname === "127.0.0.1";

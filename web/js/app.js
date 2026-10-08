@@ -29,6 +29,7 @@ function memberSeg(onChange) {
 }
 
 // ---------------------------------------------------------------- utilidades
+const htmlEl = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; };
 function toast(msg) {
   const t = document.createElement("div");
   t.className = "toast"; t.textContent = msg;
@@ -512,7 +513,8 @@ const SUGGESTIONS = ["Quanto gastei este mês?", "Quanto posso gastar até o fim
 function bubble(m) {
   const time = m.created_at ? new Date(m.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
   const cards = (m.cards || []).map(cardHtml).join("");
-  return `<div class="msg ${m.role}"><div class="txt">${md(m.content)}</div>${cards}<div class="meta">${m.channel === "whatsapp" ? '<span class="tag wa">WhatsApp</span>' : m.channel === "telegram" ? '<span class="tag tg">Telegram</span>' : ""}${m.message_type === "audio" && m.role === "user" ? "🎙️" : ""}<span>${time}</span></div></div>`;
+  const play = m.audio_path ? `<button type="button" class="audio-btn" data-audio="${esc(m.audio_path)}">▶ Ouvir áudio</button>` : "";
+  return `<div class="msg ${m.role}"${m.pid ? ` id="${m.pid}"` : ""}><div class="txt">${md(m.content)}</div>${play}${cards}<div class="meta">${m.channel === "whatsapp" ? '<span class="tag wa">WhatsApp</span>' : m.channel === "telegram" ? '<span class="tag tg">Telegram</span>' : ""}${m.message_type === "audio" && m.role === "user" ? "🎙️" : ""}<span>${time}</span></div></div>`;
 }
 function cardHtml(c) {
   if (c.type === "transaction" && c.data) {
@@ -558,13 +560,16 @@ async function chat(page) {
   async function send(text, type = "text", extra = {}) {
     if (busy || (!text.trim() && !extra.audio_base64)) return;
     busy = true; chatSending = true;
-    if (text.trim() || extra.label) box.insertAdjacentHTML("beforeend", bubble({ role: "user", content: text.trim() || extra.label, channel: "app", message_type: type, created_at: new Date().toISOString() }));
+    const pid = extra.label ? "p" + Date.now() : undefined;
+    if (text.trim() || extra.label) box.insertAdjacentHTML("beforeend", bubble({ role: "user", content: text.trim() || extra.label, channel: "app", message_type: type, created_at: new Date().toISOString(), pid }));
     delete extra.label;
     box.insertAdjacentHTML("beforeend", `<div class="typing" id="typing"><i></i><i></i><i></i></div>`);
     scroll();
     try {
       const r = await api.ask({ text, type, ...extra });
       $("#typing")?.remove();
+      // áudio: troca o "transcrevendo…" pelo que foi entendido, com o botão para ouvir
+      if (pid && r.transcricao) $("#" + pid)?.replaceWith(htmlEl(bubble({ role: "user", content: r.transcricao, channel: "app", message_type: "audio", audio_path: r.audio_path, created_at: new Date().toISOString() })));
       box.insertAdjacentHTML("beforeend", bubble({ role: "assistant", content: r.reply, cards: r.cards, created_at: new Date().toISOString() }));
       if (/^CREATE|EDIT|DELETE|CORRECT|PAY|GOAL|CANCEL/.test(r.intent || "") || /Registrei|Apaguei|Pronto|criada|Guardei|Tirei/.test(r.reply)) state.boot = null;
     } catch (e) {
@@ -578,6 +583,18 @@ async function chat(page) {
   txt.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#composer").requestSubmit(); } });
   txt.addEventListener("input", () => { txt.style.height = "auto"; txt.style.height = Math.min(txt.scrollHeight, 120) + "px"; });
   $("#chips").onclick = (e) => { const b = e.target.closest("button"); if (b) send(b.textContent); };
+  // ouvir o áudio enviado (fica guardado por 7 dias)
+  box.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-audio]"); if (!b) return;
+    b.disabled = true; b.textContent = "Carregando…";
+    try {
+      const url = await api.audioUrl(b.dataset.audio);
+      const el = document.createElement("audio");
+      el.controls = true; el.autoplay = true; el.src = url; el.className = "audio-player";
+      el.onerror = () => toast("Não foi possível tocar este áudio neste aparelho.");
+      b.replaceWith(el);
+    } catch (x) { b.disabled = false; b.textContent = "▶ Ouvir áudio"; toast(x.message.includes("not_found") || x.message.includes("404") ? "Este áudio não está mais disponível (guardamos por 7 dias)." : x.message); }
+  });
   setupMic(send);
 }
 

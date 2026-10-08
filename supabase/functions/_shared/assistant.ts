@@ -70,7 +70,7 @@ export async function handleMessage(msg: IncomingMessage, deps: AssistantDeps): 
   const user = msg.user_id;
   const content = msg.content.trim().slice(0, 2000);
   const saved = await db.rpc<{ id: string }>("fe_chat_append", user, {
-    role: "user", channel: msg.channel, content: content || "(áudio vazio)", message_type: msg.type, audio_provider: msg.audio_provider,
+    role: "user", channel: msg.channel, content: content || "(áudio vazio)", message_type: msg.type, audio_provider: msg.audio_provider, audio_path: msg.audio_path,
   });
   const uc = await db.rpc<UserContext>("fe_context", user, {});
   const state = await db.rpc<{ pending: Pending | null }>("fe_chat_state", user, {});

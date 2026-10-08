@@ -4,6 +4,7 @@
 import type { EngineDb, IncomingMessage } from "./types.ts";
 import { handleMessage, readStatement, type AssistantDeps } from "./assistant.ts";
 import { transcribeAudio, StatementError, type AiConfig } from "./ai.ts";
+import type { AudioStore } from "./storage.ts";
 
 export const CORS = {
   "access-control-allow-origin": "*",
@@ -20,6 +21,7 @@ const json = (body: unknown, status = 200) =>
 export interface AppDeps {
   db: EngineDb;
   ai?: AiConfig;
+  store?: AudioStore;
   extract?: AssistantDeps["extract"];
   getUserId: (token: string) => Promise<string | null>;
 }
@@ -68,22 +70,26 @@ export function createAppHandler(deps: AppDeps) {
     let content = typeof body?.text === "string" ? body.text.slice(0, 2000) : "";
     let type: IncomingMessage["type"] = body?.type === "audio" ? "audio" : "text";
     let audio_provider: string | undefined = type === "audio" ? "navegador" : undefined;
+    let audio_path: string | undefined;
 
     // Áudio enviado como arquivo (quando o navegador não transcreve sozinho)
     if (typeof body?.audio_base64 === "string" && body.audio_base64.length < 8_000_000) {
       try {
         const bytes = Uint8Array.from(atob(body.audio_base64), (ch) => ch.charCodeAt(0));
-        const t = await transcribeAudio(bytes, String(body.mime ?? "audio/webm"), deps.ai ?? {});
+        const mime = String(body.mime ?? "audio/webm");
+        const saving = deps.store?.save(userId, bytes, mime);   // guarda enquanto transcreve
+        const t = await transcribeAudio(bytes, mime, deps.ai ?? {});
         content = t.text; type = "audio"; audio_provider = t.provider;
+        audio_path = await saving;
       } catch (e) {
         return json({ error: `Não consegui transcrever o áudio (${(e as Error).message}).` }, 422);
       }
     }
     if (!content.trim()) return json({ error: "Mensagem vazia" }, 400);
 
-    const msg: IncomingMessage = { user_id: userId, channel: "app", type, content, timestamp: new Date().toISOString(), audio_provider };
+    const msg: IncomingMessage = { user_id: userId, channel: "app", type, content, timestamp: new Date().toISOString(), audio_provider, audio_path };
     const reply = await handleMessage(msg, { db: deps.db, ai: deps.ai });
-    return json(reply);
+    return json(type === "audio" ? { ...reply, transcricao: content, audio_path } : reply);
   };
 }
 
@@ -102,6 +108,7 @@ export interface WhatsAppConfig {
 export interface WhatsAppDeps {
   db: EngineDb;
   ai?: AiConfig;
+  store?: AudioStore;
   wa: WhatsAppConfig;
   fetch?: typeof fetch;
   waitUntil?: (p: Promise<unknown>) => void;
@@ -209,11 +216,14 @@ export function createWhatsAppHandler(deps: WhatsAppDeps) {
     let content = m.text ?? "";
     let type: IncomingMessage["type"] = "text";
     let audio_provider: string | undefined;
+    let audio_path: string | undefined;
     if (m.type === "audio" && m.media_id) {
       try {
         const bytes = await downloadMedia(m.media_id);
+        const saving = deps.store?.save(user_id, bytes, m.mime ?? "audio/ogg");
         const t = await transcribeAudio(bytes, m.mime ?? "audio/ogg", deps.ai ?? {});
         content = t.text; type = "audio"; audio_provider = t.provider;
+        audio_path = await saving;
       } catch (e) {
         console.error("áudio WhatsApp:", (e as Error).message);
         await send(m.from, "Não consegui entender o áudio agora. Pode enviar por texto?");
@@ -225,7 +235,7 @@ export function createWhatsAppHandler(deps: WhatsAppDeps) {
     }
 
     const reply = await handleMessage(
-      { user_id, channel: "whatsapp", type, content, timestamp: new Date().toISOString(), audio_provider, media_ref: m.media_id },
+      { user_id, channel: "whatsapp", type, content, timestamp: new Date().toISOString(), audio_provider, audio_path, media_ref: m.media_id },
       { db: deps.db, ai: deps.ai },
     );
     await send(m.from, reply.reply);
@@ -267,6 +277,7 @@ export interface TelegramConfig {
 export interface TelegramDeps {
   db: EngineDb;
   ai?: AiConfig;
+  store?: AudioStore;
   tg: TelegramConfig;
   fetch?: typeof fetch;
   waitUntil?: (p: Promise<unknown>) => void;
@@ -361,11 +372,14 @@ export function createTelegramHandler(deps: TelegramDeps) {
     let content = text.replace(/^\/(ajuda|help)\b/i, "ajuda");
     let type: IncomingMessage["type"] = "text";
     let audio_provider: string | undefined;
+    let audio_path: string | undefined;
     if (m.file_id) {
       try {
         const bytes = await download(m.file_id);
+        const saving = deps.store?.save(user_id, bytes, m.mime ?? "audio/ogg");
         const t = await transcribeAudio(bytes, m.mime ?? "audio/ogg", deps.ai ?? {});
         content = t.text; type = "audio"; audio_provider = t.provider;
+        audio_path = await saving;
       } catch (e) {
         console.error("áudio Telegram:", (e as Error).message);
         await send(m.chat_id, "Não consegui entender o áudio agora. Pode enviar por texto?");
@@ -375,7 +389,7 @@ export function createTelegramHandler(deps: TelegramDeps) {
     if (!content) { await send(m.chat_id, "Por enquanto entendo mensagens de texto e áudio. 🙂"); return; }
 
     const reply = await handleMessage(
-      { user_id, channel: "telegram", type, content, timestamp: new Date().toISOString(), audio_provider, media_ref: m.file_id },
+      { user_id, channel: "telegram", type, content, timestamp: new Date().toISOString(), audio_provider, audio_path, media_ref: m.file_id },
       { db: deps.db, ai: deps.ai },
     );
     await send(m.chat_id, reply.reply);

@@ -121,9 +121,11 @@ export function findAmounts(text: string): AmountCandidate[] {
     if (/^(vezes|parcelas|prestacoes|meses)$/.test(next)) role = "parcelas";
     else if (prev === "dia" || prev === "as" || prev === "ate" && prev2 === "dia") role = "dia";
     else if (next === "%" || next === "º" || next === "°" || /^(dia|dias|horas|h|anos|semanas|minutos)$/.test(next)) role = "outro";
+    // "dois cartões", "3 pizzas de 30", "duas pessoas": é quantidade, não valor
+    else if (/^[a-z]{3,}s$/.test(next) && !/^(reais|contos|pilas|mangos|pratas|mil|milhoes|centavos|vezes|parcelas|prestacoes|meses)$/.test(next) && prev !== "r$") role = "outro";
     else if (/^(de|do)$/.test(next) && /^(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)$/.test(next2)) role = "dia";
     let strength = run.some(isDigit) ? 2 : 1;
-    if (prev === "r$" || /^(reais|real|conto|contos|pila|pilas|mangos)$/.test(next)) strength = 3;
+    if (prev === "r$" || /^(reais|real|conto|contos|pila|pilas|mangos|pratas)$/.test(next)) strength = 3;
     cands.push({ value: parsed.value, alt: parsed.alt, start: i, end: j, strength, role });
     i = j + 1;
   }

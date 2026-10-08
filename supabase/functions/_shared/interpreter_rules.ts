@@ -205,11 +205,11 @@ export function detectMember(n: string, ctx: UserContext): string | undefined {
 // Compra dividida: "dividido com a Bruna", "meio a meio", "metade no meu cartão e metade no da Bruna"
 // ---------------------------------------------------------------------------
 const SPLIT_WORDS = /\b(dividid[oa]s?|dividir|dividimos|dividi|divide|rachad[oa]s?|rachar|rachamos|rachei|racha|meio a meio|metade cada|metade (pra|para) cada|cada um (com|paga|pagou) (a )?metade)\b/;
-const SPLIT_HALVES = /\bmetade (?:no|na|pelo|pela|com|do|da|em) (.+?) e (?:a outra )?metade (?:no|na|pelo|pela|com|do|da|em) (.+)$/;
+const SPLIT_HALVES = /\bmetade (?:no|na|pelo|pela|com|do|da|em|pra|pro|para|de) (.+?)(?:,|\.)? e (?:a )?(?:outra )?metade (?:no|na|pelo|pela|com|do|da|em|pra|pro|para|de) (.+)$/;
 
 function memberIn(seg: string, ctx: UserContext): string | undefined {
   const membros = ctx.membros ?? [];
-  if (/\b(meu|minha|eu)\b/.test(seg)) return membros.find((m) => m.eu)?.id;
+  if (/\b(meu|minha|eu|mim)\b/.test(seg)) return membros.find((m) => m.eu)?.id;
   for (const m of membros.filter((x) => !x.eu)) {
     const first = norm(m.nome).split(" ")[0];
     if (first.length >= 2 && new RegExp(`(^|[^a-z])${first}([^a-z]|$)`).test(seg)) return m.id;
@@ -227,9 +227,15 @@ export function detectSplit(text: string, ctx: UserContext): { partes?: NonNulla
     for (const seg of [h[1], h[2]]) {
       const membro = memberIn(seg, ctx);
       if (!membro) return null;
-      const cc = matchCard(seg, ctx);
+      // nome do cartão só vale se não for apenas o nome da pessoa ("pra Bruna" não é o cartão "Inter Bruna")
+      const firstNames = (ctx.membros ?? []).map((x) => norm(x.nome).split(" ")[0]);
+      const ccRaw = matchCard(seg, ctx);
+      const cc = ccRaw && (/\b(cartao|credito)\b/.test(seg) ? !firstNames.some((f) => norm(ccRaw).includes(f)) || norm(ccRaw).split(" ").some((w) => w.length >= 3 && !firstNames.includes(w) && seg.includes(w))
+        : norm(ccRaw).split(" ").some((w) => w.length >= 3 && !firstNames.includes(w) && seg.includes(w))) ? ccRaw : undefined;
       const conta = !cc && !/\b(cartao|credito)\b/.test(seg) ? matchAccount(seg, ctx) : undefined;
-      partes.push(cc ? { membro, cartao: cc } : conta ? { membro, conta } : { membro, cartao_do_membro: true });
+      // sem cartão/conta na parte: "cada um no seu cartão" quando a frase fala em cartões; senão, só a divisão
+      const cartoes = /\b(cartao|cartoes|credito)\b/.test(seg) || /\b(dois|2|cada um no seu|seus) cartoes\b|\bem dois cartoes\b/.test(n);
+      partes.push(cc ? { membro, cartao: cc } : conta ? { membro, conta } : cartoes ? { membro, cartao_do_membro: true } : { membro });
     }
     if (partes[0].membro === partes[1].membro) return null;
     return { partes, clean: text.slice(0, n.indexOf(h[0])).replace(/[,;\s]+$/, "") };

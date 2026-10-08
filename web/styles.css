@@ -336,3 +336,6 @@ button.card.kpi:focus-visible { outline: 2px solid var(--brand); outline-offset:
 .recbar .rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); animation: pulse 1.2s infinite; flex: none; }
 .recbar .num { font-weight: 800; font-size: 15px; }
 .recbar .rec-hint { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.audio-btn { margin-top: 6px; border: 0; border-radius: 99px; padding: 5px 12px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; background: rgba(255,255,255,.22); color: inherit; }
+.msg.assistant .audio-btn { background: var(--surface-2); }
+.audio-player { display: block; margin-top: 6px; width: 240px; max-width: 100%; height: 36px; }
