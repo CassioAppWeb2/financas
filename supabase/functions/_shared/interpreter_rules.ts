@@ -321,6 +321,16 @@ export function interpretRules(input: string, ctx: UserContext): Interpretation 
   const amount = extractAmount(text);
   const tipoFiltro = /\b(despesa|gasto)\b/.test(n) ? "despesa" : /\b(receita|entrada)\b/.test(n) ? "receita" : undefined;
 
+  // Cadastros por conversa (o agente com IA resolve e pergunta o que faltar)
+  const ENT = "(cartao|cartoes|conta corrente|conta poupanca|conta bancaria|conta digital|conta|contas|categoria|subcategoria)";
+  const isAdmin =
+    new RegExp(`\\b(cadastr\\w*|cri[ae]r?|adicion\\w*|inclu\\w*|registr\\w*|abr[ie]r?|abri)\\s+(?:\\S+\\s+){0,4}?${ENT}\\b`).test(n) && !/\b(gastei|paguei|comprei|recebi|ganhei|transferi|depositei)\b/.test(n) && !/\bconta fixa\b/.test(n) ||
+    /\b(mud\w*|alter\w*|troc\w*|edit\w*|atualiz\w*|corrig\w*|ajust\w*|aument\w*|diminu\w*|reduz\w*|coloc\w*|defin\w*)\b.*\b(vencimento|fechamento|limite|dono|saldo inicial|conta padrao|nome do cartao|nome da conta|nome da categoria)\b/.test(n) ||
+    /\b(arquiv\w*|desativ\w*|exclu\w*|apag\w*|remov\w*|renome\w*)\s+(?:\S+\s+){0,3}?(cartao|conta(?! fixa)|categoria|subcategoria)\b/.test(n) ||
+    /\bmeta de economia\b/.test(n) && !RX.question.test(n);
+  if (isAdmin && !/\b(muda|troca|corrige|altera|coloca)\s+(a |essa |esta )?(categoria|conta)\s+(para|pra)\b/.test(n)) {
+    return { ...out, intent: "ADMIN", confidence: 0.9 };
+  }
   // Apagar
   if (RX.delete.test(n) && (/\b(lancamento|despesa|receita|gasto|registro|ultim[oa]|isso|esse|essa|anterior|compra)\b/.test(n) || n.split(" ").length <= 3)) {
     return { ...out, intent: "DELETE_TRANSACTION", tipo: tipoFiltro, confidence: 0.9 };

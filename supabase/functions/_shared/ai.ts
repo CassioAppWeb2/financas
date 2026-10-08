@@ -23,6 +23,11 @@ const GEMINI_URL = (model: string) => `https://generativelanguage.googleapis.com
 // modelo lento, a pergunta vai para vários modelos AO MESMO TEMPO e vale a primeira resposta boa.
 const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-flash-latest"];
 
+/** Texto da resposta do Gemini (ignora partes que não são texto). */
+export function textOf(data: any): string {
+  return (data?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("");
+}
+
 export async function geminiCall(cfg: AiConfig, body: unknown, timeoutMs: number, models?: string[]): Promise<{ data: any; model: string }> {
   const f = cfg.fetch ?? fetch;
   const list = models ?? [...new Set([cfg.geminiModel, ...GEMINI_MODELS].filter(Boolean) as string[])];
@@ -40,7 +45,8 @@ export async function geminiCall(cfg: AiConfig, body: unknown, timeoutMs: number
       });
       if (!res.ok) { errors.push(`${model}: ${res.status}`); throw new Error(String(res.status)); }
       const data = await res.json();
-      if (!data?.candidates?.[0]?.content?.parts?.[0]?.text) { errors.push(`${model}: vazio`); throw new Error("vazio"); }
+      const parts = data?.candidates?.[0]?.content?.parts ?? [];
+      if (!parts.some((x: any) => x.text || x.functionCall)) { errors.push(`${model}: vazio`); throw new Error("vazio"); }
       return { data, model };
     }));
   } catch {
@@ -136,7 +142,7 @@ export async function interpretWithGemini(text: string, ctx: UserContext, cfg: A
     contents: [{ role: "user", parts: [{ text }] }],
     generationConfig: { responseMimeType: "application/json", temperature: 0 },
   }, 15000);
-  const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  const raw = textOf(data);
   if (!raw) return null;
   const parsed = sanitize(JSON.parse(raw), text, ctx);
   if (parsed) { parsed.provider = "gemini"; parsed.model = model; }
@@ -214,7 +220,7 @@ export async function transcribeAudio(bytes: Uint8Array, mime: string, cfg: AiCo
     ] }],
     generationConfig: { temperature: 0 },
   }, 40000);
-  return { text: String(d?.candidates?.[0]?.content?.parts?.[0]?.text ?? "").trim(), provider: `gemini:${model}` };
+  return { text: textOf(d).trim(), provider: `gemini:${model}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -274,7 +280,7 @@ export async function extractStatement(bytes: Uint8Array, mime: string, ctx: Use
   try { r = await geminiCall(cfg, body, 70000, all.filter((x) => !/lite/.test(x))); }
   catch { r = await geminiCall(cfg, body, 45000, all.filter((x) => /lite/.test(x))); }
   let raw: any;
-  try { raw = JSON.parse(r.data.candidates[0].content.parts[0].text); } catch { throw new StatementError("ilegivel", "Não consegui ler o documento."); }
+  try { raw = JSON.parse(textOf(r.data)); } catch { throw new StatementError("ilegivel", "Não consegui ler o documento."); }
   const st = sanitizeStatement(raw, ctx);
   st.model = r.model;
   if (!st.itens.length) throw new StatementError("ilegivel", "Não encontrei lançamentos no documento.");

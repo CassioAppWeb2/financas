@@ -5,6 +5,7 @@
 // Ele não grava nada diretamente: toda operação passa pelo Motor Financeiro (fe_*).
 
 import type { AssistantReply, Card, EngineDb, IncomingMessage, Interpretation, UserContext } from "./types.ts";
+import { runAgent, confirmAgent, type AgentCall, type GeminiContent } from "./agent.ts";
 import { interpret, extractStatement, StatementError, type AiConfig, type Statement } from "./ai.ts";
 import { interpretRules, matchUserCategory, matchCard, matchGoal } from "./interpreter_rules.ts";
 import { guessCategory } from "./categorizer.ts";
@@ -40,6 +41,8 @@ type Pending = (
   | { kind: "confirm_import"; st: Statement; dest: ImportDest }
   | { kind: "ask_member_card"; interp: Interpretation; membro_id: string; options: string[] }
   | { kind: "confirm_settle"; pessoa_id: string; forma?: string; data?: string; label: string }
+  | { kind: "agent"; history: GeminiContent[] }
+  | { kind: "agent_confirm"; call: AgentCall; history: GeminiContent[] }
 ) & { fila?: QueueItem[] };
 
 interface Outcome extends AssistantReply { pending?: Pending | null; }
@@ -218,7 +221,9 @@ async function dispatch(i: Interpretation, c: Ctx): Promise<Outcome> {
         : { reply: `Olá${c.uc.nome ? `, ${c.uc.nome}` : ""}! 👋 Me conte um gasto ou recebimento, ou pergunte sobre suas finanças.` };
       break;
     case "HELP": out = { reply: HELP }; break;
+    case "ADMIN": out = await agentFlow(c, []); break;
     default:
+      if (c.deps.ai?.geminiKey) { out = await agentFlow(c, []); break; }
       out = { reply: "Hmm, não entendi. 🤔 Você pode dizer, por exemplo:\n• “gastei 50 na padaria”\n• “recebi 1.000 de salário”\n• “quanto gastei este mês?”\n\nDigite *ajuda* para ver tudo o que eu faço." };
   }
   out.intent = i.intent;
@@ -234,6 +239,7 @@ const HELP = `Sou seu assistente financeiro. Basta conversar comigo:
 💳 *Cartão*: “comprei uma TV de 3.000 em 10x no cartão Nubank”, “quanto está a fatura?”, “paguei a fatura do Nubank”
 📄 *Fatura em PDF*: mande o PDF ou a foto da fatura do cartão (ou do extrato) que eu leio e lanço tudo
 🤝 *Dividir*: “jantar de 150 no Nubank dividido com a Bruna”, “250 no mercado, metade no meu cartão e metade no da Bruna”, “quanto devo?”, “acertei com a Bruna”
+🛠️ *Cadastros conversando*: “cadastre para a Bruna o cartão Nubank que vence dia 10”, “crie a conta Itaú com saldo de 2.300”, “mude o limite do Nubank para 8 mil”
 🔄 *Contas fixas*: “minha internet custa 120 todo dia 10”, “recebo 7 mil todo quinto dia útil”, “não pago mais a Netflix”
 🎯 *Metas*: “quero juntar 20 mil até dezembro para a viagem”, “guardei 500 na meta viagem”, “como estão minhas metas?”
 💵 *Orçamento*: “orçamento de 1.000 para alimentação”, “como está meu orçamento?”
@@ -424,7 +430,8 @@ function looksLikeNewCommand(text: string, uc: UserContext): boolean {
 async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
   const text = c.msg.content;
   const n = norm(text);
-  if (NO.test(n) && p.kind !== "ask_correction") return { reply: "Ok, cancelado. 👍", pending: null };
+  const agentAnswer = p.kind === "agent" && !/^(nao|cancela|cancelar|cancele|esquece|deixa pra la|deixa|para|pare)[.!]*$/.test(n);
+  if (NO.test(n) && p.kind !== "ask_correction" && !agentAnswer) return { reply: "Ok, cancelado. 👍", pending: null };
   const yes = YES.test(n);
 
   switch (p.kind) {
@@ -530,6 +537,15 @@ async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
         return { reply: `✅ Acerto registrado: ${r.devedor} pagou ${brl(r.valor_cents)} para ${r.credor}.` +
           (r.transferencia ? `\nLancei como transferência: ${r.conta_origem} → ${r.conta_destino} (não conta como despesa nova).` : `\n(Não lancei transferência porque falta conta cadastrada de um de vocês.)`), pending: null };
       }
+      break;
+    }
+    case "agent": {
+      const r = interpretRules(text, c.uc);
+      if (r.intent !== "OTHER" && r.intent !== "ADMIN" && r.intent !== "GREETING" && r.confidence >= 0.9 && !/^\d/.test(n)) break;  // mudou de assunto
+      return agentFlow(c, p.history);
+    }
+    case "agent_confirm": {
+      if (yes) return { reply: await confirmAgent(p.call, agentCtx(c)), pending: null };
       break;
     }
     case "confirm_cancel_recurring": {
@@ -640,6 +656,25 @@ async function correctFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
 // ---------------------------------------------------------------------------
 // CONSULTAS (sempre com dados reais do banco)
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Agente (IA com ferramentas): cadastros por conversa e perguntas livres
+// ---------------------------------------------------------------------------
+function agentCtx(c: Ctx) { return { db: c.deps.db, user: c.user, uc: c.uc, origem: origin(c) }; }
+
+async function agentFlow(c: Ctx, history: GeminiContent[]): Promise<Outcome> {
+  if (!c.deps.ai?.geminiKey) {
+    return { reply: "Para cadastros por conversa preciso da IA, que não está configurada. Use as telas *Cartões*, *Contas* e *Categorias* no app.", pending: null };
+  }
+  try {
+    const r = await runAgent(c.msg.content, history, agentCtx(c), c.deps.ai);
+    if (r.confirm) return { reply: r.reply, pending: { kind: "agent_confirm", call: r.confirm.call, history: r.confirm.history } };
+    return { reply: r.reply, pending: r.history ? { kind: "agent", history: r.history } : null };
+  } catch (e) {
+    console.error("agente:", (e as Error).message);
+    return { reply: "Não consegui falar com a IA agora. 😕 Tente de novo em instantes — ou faça o cadastro pelas telas do app (*Cartões*, *Contas*, *Categorias*).", pending: null };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Compras divididas e acertos da família
 // ---------------------------------------------------------------------------
