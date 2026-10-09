@@ -5,6 +5,7 @@
 import type { EngineDb, UserContext } from "./types.ts";
 import { geminiCall, type AiConfig } from "./ai.ts";
 import { brl, dateBR, norm } from "./text.ts";
+import { searchManual, TOPICS } from "./manual.ts";
 
 export type GeminiContent = { role: "user" | "model"; parts: any[] };
 export interface AgentCall { name: string; args: Record<string, any> }
@@ -60,6 +61,9 @@ export const TOOLS = [
   }, ["meta"]),
   fn("definir_orcamento", "Define o orçamento mensal de uma categoria de despesa (0 remove).", { categoria: S("Categoria"), valor: N("Valor por mês em reais") }, ["categoria", "valor"]),
   fn("definir_meta_economia_mensal", "Define quanto a família quer economizar por mês (0 remove).", { valor: N("Valor em reais") }, ["valor"]),
+  fn("manual_do_app", "Consulta o manual do aplicativo (como instalar, atualizar, microfone, Telegram, família, cartões, faturas, importar, contas a pagar, relatórios etc.). Use SEMPRE que a pessoa tiver dúvida de como usar o app ou algo não funcionar.", {
+    pergunta: S("A dúvida da pessoa, com as palavras dela"),
+  }, ["pergunta"]),
   fn("consultar_cadastros", "Lista contas (com saldo), cartões (fechamento, vencimento, limite, dono) e categorias.", {}),
   fn("resumo_do_mes", "Números do mês: receitas, despesas, saldo, faturas, gastos por categoria. Use para responder perguntas sobre as finanças com dados reais.", {
     mes: S("Mês AAAA-MM (opcional, padrão: atual)"),
@@ -80,6 +84,7 @@ Regras:
 - Contas: ${uc.contas.join(", ") || "nenhuma"}. Cartões: ${(uc.cartoes ?? []).join(", ") || "nenhum"}.
 - Lançar gastos/receitas e consultas comuns o app já faz sozinho; se a pessoa pedir isso, diga para escrever naturalmente, ex.: "gastei 50 no mercado", "quanto gastei este mês?".
 - Perguntas gerais sobre finanças (o que é CDI, como economizar...) responda em até 5 linhas, sem inventar números da pessoa; para números dela, use resumo_do_mes.
+- Dúvidas de como usar o app (telas, botões, instalar, microfone, Telegram, família, erros): chame manual_do_app e explique em passos curtos, usando só o que o manual diz. Não invente telas ou botões; se o manual não cobrir, diga que não sabe e sugira falar com quem administra o app.
 - Nunca diga que fez algo que não fez. Ao concluir um cadastro, confirme em 1–2 linhas com os dados gravados.`;
 }
 
@@ -193,6 +198,11 @@ export async function execTool(call: AgentCall, c: Ctx): Promise<Record<string, 
     case "definir_meta_economia_mensal":
       await admin("perfil", { meta_economia: String(a.valor ?? 0) });
       return { ok: true, meta_economia_mensal: brl(Math.round(Number(a.valor ?? 0) * 100)) };
+    case "manual_do_app": {
+      const r = searchManual(String(a.pergunta ?? ""), 3);
+      return r.length ? { topicos: r.map((x) => ({ titulo: x.topic.titulo, texto: x.topic.texto })) }
+        : { topicos: [], assuntos_disponiveis: TOPICS.map((t) => t.titulo) };
+    }
     case "consultar_cadastros": {
       const d = await cadastros(c);
       return {

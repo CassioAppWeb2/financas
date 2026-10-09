@@ -13,6 +13,7 @@ import { extractAmount, findAmounts } from "./money.ts";
 import { resolveDate, addDays } from "./dates.ts";
 import { brl, dateBR, norm, pct } from "./text.ts";
 import { stripVocative, detectRename, asksName, validName } from "./naming.ts";
+import { isAppQuestion, manualAnswer, topicIndex } from "./manual.ts";
 
 export interface AssistantDeps {
   db: EngineDb;
@@ -85,6 +86,7 @@ export async function handleMessage(msg: IncomingMessage, deps: AssistantDeps): 
   try {
     if (msg.document) out = await documentFlow(c);
     if (!out && content) out = await namingFlow(c);
+    if (!out && content && isAppQuestion(content) && !findAmounts(content).some((a) => a.role === "valor" && a.value > 0)) out = await appHelpFlow(c);
     if (!out && !content && voc.chamou) out = { reply: `Oi${uc.nome ? `, ${uc.nome}` : ""}! Estou aqui. 👋 Pode falar: um gasto, um recebimento ou uma pergunta sobre suas finanças.` };
     if (!out && !content) out = { reply: "Não consegui entender o áudio. Pode repetir ou digitar?" };
     if (!out && state.pending) {
@@ -117,6 +119,16 @@ export async function handleMessage(msg: IncomingMessage, deps: AssistantDeps): 
   if (out.pending !== undefined) await db.rpc("fe_chat_state", user, { pending: out.pending });
   await db.rpc("fe_chat_append", user, { role: "assistant", channel: msg.channel, content: out.reply, cards: out.cards ?? null });
   return { reply: out.reply, cards: out.cards, intent: out.intent };
+}
+
+// ---------------------------------------------------------------------------
+// Dúvidas sobre como usar o app ("como conecto o Telegram?", "o microfone fica pedindo permissão")
+// ---------------------------------------------------------------------------
+async function appHelpFlow(c: Ctx): Promise<Outcome> {
+  const ans = manualAnswer(c.msg.content);
+  if (ans) return { reply: ans, intent: "HELP" };
+  if (c.deps.ai?.geminiKey) return agentFlow(c, []);   // a IA consulta o manual e responde
+  return { reply: `Não achei esse assunto no manual. 🤔 Posso explicar:\n${topicIndex()}\n\nPergunte, por exemplo: “como conecto o Telegram?”`, intent: "HELP" };
 }
 
 // ---------------------------------------------------------------------------
@@ -283,7 +295,9 @@ const HELP = `Sou seu assistente financeiro. Basta conversar comigo:
 👨‍👩‍👧 *Família*: “gastamos 300 no mercado” (compartilhado), “quanto eu gastei?”, “quanto minha esposa gastou?”
 🏷️ *Meu nome*: “seu nome agora é Jarbas” — depois é só me chamar: “Jarbas, quanto gastei hoje?”
 
-Também entendo áudio — no app (🎙️), no WhatsApp e no Telegram.`;
+Também entendo áudio — no app (🎙️), no WhatsApp e no Telegram.
+
+❓ *Dúvidas sobre o app*: pergunte como fazer qualquer coisa — “como conecto o Telegram?”, “como instalo no celular?”, “o microfone fica pedindo permissão”, “como importo a fatura?”. Digite *manual* para ver todos os assuntos.`;
 
 function soon(what: string): Outcome {
   return { reply: `🚧 ${what} chegam na próxima fase do app. Por enquanto posso registrar receitas e despesas, consultar gastos e saldos e analisar seu mês.` };

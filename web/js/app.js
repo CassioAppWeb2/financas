@@ -590,7 +590,7 @@ async function transactions(page) {
 }
 
 // ---------------------------------------------------------------- ASSISTENTE (chat)
-const SUGGESTIONS = ["Quanto gastei este mês?", "Quanto posso gastar até o fim do mês?", "Quanto está a fatura?", "Como estão minhas metas?", "Tenho algum alerta?", "Ajuda"];
+const SUGGESTIONS = ["Quanto gastei este mês?", "Quanto posso gastar até o fim do mês?", "Quanto está a fatura?", "Como estão minhas metas?", "Tenho algum alerta?", "Manual do app", "Ajuda"];
 
 function bubble(m) {
   const time = m.created_at ? new Date(m.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
