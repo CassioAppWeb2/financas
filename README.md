@@ -147,4 +147,5 @@ sua resposta é validada (valor só é aceito se aparece na mensagem; categoria 
 O código compartilhado (`supabase/functions/_shared`) é publicado a partir do GitHub: o `index.ts` enviado ao Supabase
 importa os módulos por `https://raw.githubusercontent.com/CassioAppWeb2/financas/<commit>/supabase/functions/_shared/...`,
 fixados num commit (nada muda sozinho). Para atualizar: faça push em `main`, troque o `<commit>` no entrypoint e publique de novo.
+Use sempre `import ... from "https://raw.githubusercontent.com/..."` (import estático) no entrypoint: `await import(...)` dinâmico não funciona no Supabase e derruba a função.
 Com a CLI, `supabase functions deploy assistant --no-verify-jwt` continua funcionando normalmente com o `index.ts` do repositório.
