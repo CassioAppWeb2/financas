@@ -97,7 +97,7 @@ function cardForm(k, after) {
         <div class="field"><label>Dia do vencimento</label><input class="input num" name="vencimento" type="number" min="1" max="31" value="${k?.vencimento || ""}" placeholder="Ex.: 12"></div>
       </div>
       <div class="row">
-        <div class="field"><label>Limite (R$) <span class="muted">opcional</span></label><input class="input num" name="limite" inputmode="decimal" value="${C.moneyInput(k?.limite_cents)}" placeholder="0,00"></div>
+        <div class="field"><label>Limite (R$) <span class="muted">opcional</span></label><input class="input num" name="limite" inputmode="decimal" value="${C.moneyInput(k?.limite_cents)}" placeholder="R$ 0,00"></div>
         <div class="field"><label>Pagar a fatura pela conta</label><select class="input" name="conta">${opts(contas.map((a) => [a.id, a.nome]), k?.conta_pagamento_id || contas.find((a) => a.padrao)?.id)}</select></div>
       </div>
       ${C.family() ? `<div class="field"><label>De quem é o cartão?</label><select class="input" name="membro">
@@ -225,7 +225,7 @@ function recForm(x, after) {
       <div class="seg" id="rTipo" style="margin-bottom:12px"><button type="button" data-v="despesa" class="${tipo0 === "despesa" ? "on" : ""}">Despesa</button><button type="button" data-v="receita" class="${tipo0 === "receita" ? "on" : ""}">Receita</button></div>
       <div class="row">
         <div class="field"><label>Descrição</label><input class="input" name="descricao" maxlength="80" value="${C.esc(x?.descricao || "")}" placeholder="Ex.: Internet, Aluguel, Salário"></div>
-        <div class="field"><label>Valor (R$)</label><input class="input num" name="valor" inputmode="decimal" value="${C.moneyInput(x?.valor_cents)}" placeholder="0,00"></div></div>
+        <div class="field"><label>Valor (R$)</label><input class="input num" name="valor" inputmode="decimal" value="${C.moneyInput(x?.valor_cents)}" placeholder="R$ 0,00"></div></div>
       <div class="row">
         <div class="field"><label>Categoria</label><select class="input" name="categoria_id"></select></div>
         <div class="field"><label>Subcategoria</label><select class="input" name="subcategoria_id"></select></div></div>
@@ -296,66 +296,107 @@ function recForm(x, after) {
 // =====================================================================
 // METAS
 // =====================================================================
+const TIPOS_META = {
+  reserva: { t: "Reserva de emergência", ico: "🛟", d: "Dinheiro para imprevistos (perda de renda, saúde, consertos). Você escolhe quantos meses de gastos quer cobrir." },
+  poupanca: { t: "Metas de poupança", ico: "🎯", d: "Objetivos com valor e prazo: viagem, carro, reforma, estudos…" },
+  investimento: { t: "Investimentos", ico: "📈", d: "Quanto você planeja aplicar por mês e o valor que quer acumular. Simule rendimentos na tela Mercado." },
+};
+
 export async function goalsView(page) {
   await C.loadBoot();
-  const goals = await C.api.rpc("app_goals", { todas: true });
+  const pl = await C.api.rpc("app_planning");
+  const goals = pl.metas || [];
   const ativas = goals.filter((g) => g.status === "ativa"), outras = goals.filter((g) => g.status !== "ativa");
+  const sobra = Number(pl.sobra_media_cents), plan = Number(pl.planejado_mensal_cents);
   const card = (g) => `<div class="card goal" data-id="${g.id}">
-    <div class="row" style="justify-content:space-between;align-items:flex-start"><h2 style="margin:0">${C.esc(g.icone || "🎯")} ${C.esc(g.nome)}</h2>
+    <div class="row" style="justify-content:space-between;align-items:flex-start"><h2 style="margin:0">${C.esc(g.icone || TIPOS_META[g.tipo]?.ico || "🎯")} ${C.esc(g.nome)}</h2>
       ${g.status === "concluida" ? `<span class="tag ok">Concluída 🎉</span>` : g.status !== "ativa" ? `<span class="tag">Arquivada</span>` : g.atrasada ? `<span class="tag warn">Fora do ritmo</span>` : ""}</div>
     <div class="kv" style="margin-top:10px"><span class="num"><b>${C.brl(g.atual_cents)}</b> de ${C.brl(g.objetivo_cents)}</span><b>${Math.round(g.progresso)}%</b></div>
     ${bar(g.progresso, g.status === "concluida" ? "ok" : "")}
     <div class="small muted" style="margin-top:8px;line-height:1.6">
+      ${g.tipo === "reserva" && g.gasto_medio_cents ? `Cobre <b>${String(g.cobertura_meses ?? 0).replace(".", ",")} ${g.cobertura_meses === 1 ? "mês" : "meses"}</b> dos seus gastos (média ${C.brl(g.gasto_medio_cents)}/mês)${g.meses_reserva ? ` · objetivo: ${g.meses_reserva} meses` : ""}<br>` : ""}
       ${g.status === "concluida" ? "Objetivo atingido." : `Faltam <b class="num">${C.brl(g.falta_cents)}</b>`}
-      ${g.prazo ? ` · prazo ${C.dateBR(g.prazo)}` : " · sem prazo"}
-      ${g.por_mes_cents && g.status === "ativa" ? `<br>Para chegar no prazo: <b class="num">${C.brl(g.por_mes_cents)}/mês</b> (${C.brl(g.por_semana_cents)}/semana)` : ""}
-      ${g.ritmo_mensal_cents ? `<br>Seu ritmo: ${C.brl(g.ritmo_mensal_cents)}/mês` : ""}
-      ${g.previsao && g.status === "ativa" ? `<br>Previsão de conclusão: <b>${C.dateBR(g.previsao)}</b> <span class="muted">(estimativa)</span>` : ""}</div>
+      ${g.prazo ? ` · prazo ${C.dateBR(g.prazo)}` : ""}
+      ${g.plano_mensal_cents && g.status === "ativa" ? `<br>Seu plano: <b class="num">${C.brl(g.plano_mensal_cents)}/mês</b>${g.previsao_plano ? ` → conclui em <b>${C.dateBR(g.previsao_plano)}</b>` : ""}` : ""}
+      ${g.por_mes_cents && g.status === "ativa" ? `<br>Para chegar no prazo: <b class="num">${C.brl(g.por_mes_cents)}/mês</b>` : ""}
+      ${g.ritmo_mensal_cents ? `<br>Ritmo real (últimos meses): ${C.brl(g.ritmo_mensal_cents)}/mês` : ""}</div>
     ${g.status === "ativa" ? `<div class="row" style="margin-top:12px"><button class="btn small primary" data-act="add">+ Guardar</button><button class="btn small" data-act="sub">− Retirar</button><span class="spacer"></span><button class="btn small ghost" data-act="hist">Histórico</button><button class="btn small ghost" data-act="edit">${icon("edit", 16)}</button></div>`
       : `<div class="row" style="margin-top:12px"><button class="btn small ghost" data-act="hist">Histórico</button><button class="btn small ghost" data-act="edit">${icon("edit", 16)}</button></div>`}
   </div>`;
+  const section = (tipo) => {
+    const list = ativas.filter((g) => (g.tipo || "poupanca") === tipo), T = TIPOS_META[tipo];
+    return `<section class="plan-sec"><div class="plan-sec-h"><h2>${T.ico} ${T.t}</h2><button class="btn small" data-new="${tipo}">${icon("plus", 15)} ${tipo === "reserva" && list.length ? "Outra" : "Nova"}</button></div>
+      ${list.length ? `<div class="grid two">${list.map(card).join("")}</div>` : `<div class="card plan-empty"><p class="small muted">${T.d}</p><button class="btn small primary" data-new="${tipo}">${tipo === "reserva" ? "Criar reserva de emergência" : tipo === "investimento" ? "Criar plano de investimento" : "Criar meta"}</button></div>`}
+      ${tipo === "investimento" ? `<p class="small muted" style="margin-top:8px">Para ver quanto um valor renderia, use o simulador em <a href="#/mercado">Mercado</a>. O app não indica onde investir — a decisão é sua.</p>` : ""}</section>`;
+  };
   page.innerHTML = `
-    <div class="page-head"><h1>Metas</h1><button class="btn primary" id="newGoal">${icon("plus", 17)} Nova meta</button></div>
-    <div class="grid two" id="goalList">${ativas.map(card).join("") || `<div class="card empty" style="grid-column:1/-1"><div class="big">🎯</div><p><b>Nenhuma meta ainda.</b></p><p class="muted">Ex.: juntar R$ 20.000 até dezembro para a viagem. Eu calculo quanto guardar por mês e acompanho a previsão. Também dá para dizer ao assistente: “guardei 500 na meta viagem”.</p></div>`}</div>
-    ${outras.length ? `<details style="margin-top:16px"><summary class="small" style="cursor:pointer;font-weight:700">Concluídas e arquivadas (${outras.length})</summary><div class="grid two" style="margin-top:10px" id="goalOld">${outras.map(card).join("")}</div></details>` : ""}`;
+    <div class="page-head"><h1>Metas e planejamento</h1></div>
+    <div class="card plan-sum">
+      <h2>Seu mês em média <span class="small muted">(últimos 3 meses completos)</span></h2>
+      <div class="plan-nums">
+        <div><span class="small muted">Renda</span><b class="num income">${C.brl(pl.renda_media_cents)}</b></div>
+        <div><span class="small muted">Gastos</span><b class="num expense">${C.brl(pl.gasto_medio_cents)}</b></div>
+        <div><span class="small muted">Sobra</span><b class="num ${sobra < 0 ? "expense" : ""}">${C.brl(sobra)}</b></div>
+        <div><span class="small muted">Planejado p/ metas</span><b class="num">${C.brl(plan)}/mês</b></div>
+      </div>
+      ${sobra > 0 && plan > 0 ? `${bar(Math.min(100, (plan / sobra) * 100), plan > sobra ? "bad" : "ok")}<p class="small muted" style="margin:4px 0 0">${plan > sobra ? `Seu plano mensal passa a sobra média em <b>${C.brl(plan - sobra)}</b>.` : `Seu plano usa <b>${Math.round((plan / sobra) * 100)}%</b> da sobra média.`}</p>` : `<p class="small muted" style="margin:6px 0 0">${Number(pl.renda_media_cents) ? "Defina um <b>valor por mês</b> nas metas para ver quanto da sua sobra está planejado." : "Lance receitas e despesas por alguns meses para ver a média aqui."}</p>`}
+    </div>
+    ${section("reserva")}${section("poupanca")}${section("investimento")}
+    ${outras.length ? `<details style="margin-top:16px"><summary class="small" style="cursor:pointer;font-weight:600">Concluídas e arquivadas (${outras.length})</summary><div class="grid two" style="margin-top:10px">${outras.map(card).join("")}</div></details>` : ""}
+    <p class="small muted" style="margin-top:14px">O patrimônio (soma das contas mês a mês) aparece no gráfico do Início. Pelo assistente: “guardei 500 na reserva”, “como estão minhas metas?”.</p>`;
   const reload = () => goalsView(page);
-  $("#newGoal").onclick = () => goalForm(null, reload);
   page.onclick = (e) => {
+    const nw = e.target.closest("[data-new]");
+    if (nw) return goalForm(null, reload, nw.dataset.new, pl);
     const box = e.target.closest(".goal[data-id]"), act = e.target.closest("[data-act]")?.dataset.act;
     if (!box || !act) return;
     const g = goals.find((x) => x.id === box.dataset.id);
-    if (act === "edit") goalForm(g, reload);
+    if (act === "edit") goalForm(g, reload, g.tipo, pl);
     if (act === "add" || act === "sub") contribDialog(g, act === "sub", reload);
     if (act === "hist") goalHistory(g, reload);
   };
   C.setRefresh(reload);
 }
 
-function goalForm(g, after) {
-  C.modal(`<h2>${g ? "Editar meta" : "Nova meta"}</h2>
+function goalForm(g, after, tipo = "poupanca", pl = {}) {
+  const T = TIPOS_META[tipo] || TIPOS_META.poupanca, gasto = Number(pl.gasto_medio_cents || 0);
+  const reserva = tipo === "reserva";
+  C.modal(`<h2>${g ? "Editar" : "Nova"}: ${T.t.replace(/^Metas de /, "meta de ").replace(/^Investimentos$/, "plano de investimento")}</h2>
     <form id="gf" novalidate>
-      <div class="row"><div class="field" style="flex:0 0 80px"><label>Ícone</label><input class="input" name="icone" maxlength="4" value="${C.esc(g?.icone || "🎯")}" style="text-align:center"></div>
-        <div class="field"><label>Nome</label><input class="input" name="nome" maxlength="60" value="${C.esc(g?.nome || "")}" placeholder="Ex.: Viagem, Reserva de emergência"></div></div>
-      <div class="row"><div class="field"><label>Quanto quer juntar (R$)</label><input class="input num" name="valor" inputmode="decimal" value="${C.moneyInput(g?.objetivo_cents)}" placeholder="0,00"></div>
+      <div class="row"><div class="field" style="flex:0 0 80px"><label>Ícone</label><input class="input" name="icone" maxlength="4" value="${C.esc(g?.icone || T.ico)}" style="text-align:center"></div>
+        <div class="field"><label>Nome</label><input class="input" name="nome" maxlength="60" value="${C.esc(g?.nome || (reserva ? "Reserva de emergência" : ""))}" placeholder="${tipo === "investimento" ? "Ex.: Aposentadoria, Renda fixa" : "Ex.: Viagem, Carro novo"}"></div></div>
+      ${reserva ? `<div class="field"><label>Quantos meses de gastos quer cobrir?</label><select class="input" name="meses">${[3, 4, 6, 9, 12].map((n) => `<option value="${n}" ${(g?.meses_reserva ?? 6) === n ? "selected" : ""}>${n} meses${gasto ? ` — ${C.brl(gasto * n)}` : ""}</option>`).join("")}</select>
+        <span class="small muted">${gasto ? `Seu gasto médio é ${C.brl(gasto)}/mês (últimos 3 meses). A escolha de quantos meses é sua.` : "Ainda não há gastos suficientes para calcular a média — informe o valor abaixo."}</span></div>` : ""}
+      <div class="row"><div class="field"><label>${reserva ? "Valor da reserva (R$)" : tipo === "investimento" ? "Quanto quer acumular (R$)" : "Quanto quer juntar (R$)"}</label><input class="input num" name="valor" inputmode="decimal" value="${C.moneyInput(g?.objetivo_cents ?? (reserva && gasto ? gasto * 6 : null))}" placeholder="R$ 0,00"></div>
         <div class="field"><label>Até quando <span class="muted">opcional</span></label><input class="input" type="date" name="prazo" value="${g?.prazo || ""}"></div></div>
-      ${g ? "" : `<div class="field"><label>Já tenho guardado (R$) <span class="muted">opcional</span></label><input class="input num" name="inicial" inputmode="decimal" placeholder="0,00"></div>`}
+      <div class="field"><label>${tipo === "investimento" ? "Quanto pretende aplicar por mês (R$)" : "Quanto pretende guardar por mês (R$)"} <span class="muted">opcional</span></label><input class="input num" name="plano" inputmode="decimal" value="${C.moneyInput(g?.plano_mensal_cents)}" placeholder="R$ 0,00">
+        <span class="small muted" id="planHint"></span></div>
+      ${g ? "" : `<div class="field"><label>Já tenho guardado (R$) <span class="muted">opcional</span></label><input class="input num" name="inicial" inputmode="decimal" placeholder="R$ 0,00"></div>`}
       <p class="small expense hidden form-err"></p>
       <div class="modal-actions">${g ? `<button type="button" class="btn" id="gArch">${g.status === "ativa" ? "Arquivar" : "Reativar"}</button><span class="spacer"></span>` : ""}
         <button type="button" class="btn" id="gc">Cancelar</button><button class="btn primary">Salvar</button></div>
     </form>`, (m, close) => {
     const f = $("#gf", m);
     $("#gc", m).onclick = close;
+    if (reserva && gasto) f.meses.onchange = () => { f.valor.value = C.moneyInput(gasto * Number(f.meses.value)); hint(); };
+    const hint = () => {
+      const v = C.parseMoney(f.valor.value) || 0, pm = C.parseMoney(f.plano.value) || 0, ini = g ? g.atual_cents / 100 : (C.parseMoney(f.inicial?.value) || 0);
+      const rest = Math.max(0, v - ini);
+      $("#planHint", m).textContent = pm > 0 && rest > 0 ? `Guardando isso por mês, você chega lá em cerca de ${Math.ceil(rest / pm)} ${Math.ceil(rest / pm) === 1 ? "mês" : "meses"} (sem contar rendimentos).` : "";
+    };
+    f.addEventListener("input", hint); hint();
     $("#gArch", m)?.addEventListener("click", async () => {
       try { await C.api.rpc("app_archive_goal", { id: g.id, status: g.status === "ativa" ? "cancelada" : "ativa" }); close(); C.state.boot = null; after(); } catch (y) { C.toast(y.message); }
     });
     f.onsubmit = async (e) => {
       e.preventDefault();
       const v = C.parseMoney(f.valor.value);
-      if (!f.nome.value.trim()) return err(m, "Dê um nome para a meta.");
-      if (!(v > 0)) return err(m, "Informe quanto quer juntar.");
-      const p = { id: g?.id, nome: f.nome.value.trim(), icone: f.icone.value.trim() || "🎯", valor: v, prazo: f.prazo.value || "" };
+      if (!f.nome.value.trim()) return err(m, "Dê um nome.");
+      if (!(v > 0)) return err(m, "Informe o valor.");
+      const p = { id: g?.id, tipo, nome: f.nome.value.trim(), icone: f.icone.value.trim() || T.ico, valor: v, prazo: f.prazo.value || "",
+        plano_mensal: f.plano.value.trim() ? String(C.parseMoney(f.plano.value) || "") : "", meses_reserva: reserva ? f.meses.value : "" };
       if (f.inicial?.value.trim()) { const i = C.parseMoney(f.inicial.value); if (!(i >= 0)) return err(m, "Valor guardado inválido."); p.valor_inicial = i; }
-      try { await C.api.rpc("app_save_goal", p); close(); C.state.boot = null; C.toast("Meta salva ✅"); after(); } catch (y) { err(m, y.message); }
+      try { await C.api.rpc("app_save_goal", p); close(); C.state.boot = null; C.toast("Salvo ✅"); after(); } catch (y) { err(m, y.message); }
     };
   });
 }
@@ -363,7 +404,7 @@ function goalForm(g, after) {
 function contribDialog(g, retirada, after) {
   C.modal(`<h2>${retirada ? "Retirar da" : "Guardar na"} meta ${C.esc(g.nome)}</h2>
     <form id="cf" novalidate><div class="row">
-      <div class="field"><label>Valor (R$)</label><input class="input num" name="valor" inputmode="decimal" placeholder="0,00"></div>
+      <div class="field"><label>Valor (R$)</label><input class="input num" name="valor" inputmode="decimal" placeholder="R$ 0,00"></div>
       <div class="field"><label>Data</label><input class="input" type="date" name="data" value="${C.todayISO()}"></div></div>
       <p class="small muted">Isto registra o progresso da meta. Se o dinheiro foi para outra conta (poupança, investimento), registre também a transferência ou aplicação.</p>
       <p class="small expense hidden form-err"></p>
@@ -437,7 +478,7 @@ export async function budgetsView(page) {
 function budgetForm(x, mes, after) {
   C.modal(`<h2>Orçamento — ${x.icone || ""} ${C.esc(x.categoria)}</h2>
     <form id="bf" novalidate>
-      <div class="field"><label>Limite por mês (R$)</label><input class="input num" name="valor" inputmode="decimal" value="${C.moneyInput(x.limite_cents)}" placeholder="0,00"></div>
+      <div class="field"><label>Limite por mês (R$)</label><input class="input num" name="valor" inputmode="decimal" value="${C.moneyInput(x.limite_cents)}" placeholder="R$ 0,00"></div>
       <p class="small muted">Vale a partir de ${C.monthTitle(mes)}. Gasto neste mês até agora: <b>${C.brl(x.gasto_cents)}</b>.</p>
       <p class="small expense hidden form-err"></p>
       <div class="modal-actions">${x.limite_cents ? `<button type="button" class="btn danger" id="bRm">Remover orçamento</button><span class="spacer"></span>` : ""}
@@ -840,7 +881,7 @@ export function splitArea(host, payDefault) {
   host.innerHTML = `<div class="split-box"><div class="small muted" style="margin-bottom:6px">Cada um com a sua parte. Se a parte de alguém for paga com cartão/conta de outra pessoa, vira <b>acerto</b> entre vocês.</div>
     ${membros.map((mm) => `<div class="row split-row" data-m="${mm.id}">
       <span class="split-name">${mm.eu ? "Eu" : C.esc(mm.nome.split(" ")[0])}</span>
-      <input class="input num" data-v inputmode="decimal" placeholder="0,00" style="max-width:110px">
+      <input class="input num" data-v inputmode="decimal" placeholder="R$ 0,00" style="max-width:110px">
       <select class="input" data-p>${payOpts(payDefault())}</select></div>`).join("")}
     <p class="small muted" data-sum></p></div>`;
   let manual = false;
