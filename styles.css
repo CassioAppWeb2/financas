@@ -546,3 +546,37 @@ button.card.kpi { display: flex; flex-direction: column; justify-content: flex-s
 svg.rot90 { transform: rotate(90deg); }
 .pend { border-left-width: 1px; }
 .pend > .pend-label:first-child { margin-top: 0; }
+
+/* Mercado */
+.mk-aviso { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--ink-2); background: var(--accent-soft); border-radius: 12px; padding: 10px 12px; margin: -6px 0 16px; }
+.mk-aviso svg.i { color: var(--accent); margin-top: 1px; }
+.mk-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.mk-card { display: flex; flex-direction: column; gap: 4px; padding: 16px; }
+.mk-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.mk-name { font-size: 13px; color: var(--ink-2); font-weight: 500; }
+.mk-val { font-size: 23px; font-weight: 600; letter-spacing: -.02em; }
+.mk-var { font-size: 11.5px; font-weight: 600; border-radius: 99px; padding: 2px 7px; white-space: nowrap; }
+.mk-var.up { color: var(--ink-2); background: var(--surface-2); }
+.mk-var.down { color: var(--ink-2); background: var(--surface-2); }
+.spark { width: 100%; height: 34px; margin: 4px 0 2px; }
+.spark path { fill: none; stroke: var(--series-1); stroke-width: 1.6; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.mk-foot { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; flex-wrap: wrap; }
+.chips-sm { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.chips-sm button { border: 1px solid var(--line); background: var(--surface); border-radius: 99px; padding: 3px 10px; font: inherit; font-size: 12.5px; cursor: pointer; color: var(--ink-2); }
+.chips-sm button:hover { border-color: var(--brand); color: var(--brand); }
+.prods { display: grid; gap: 6px; }
+.prod { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; cursor: pointer; flex-wrap: wrap; }
+.prod:has(input[type=checkbox]:checked) { border-color: color-mix(in srgb, var(--brand) 45%, var(--line)); background: color-mix(in srgb, var(--brand) 5%, var(--surface)); }
+.prod input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--brand); flex: none; }
+.prod-name { flex: 1; min-width: 140px; font-weight: 500; }
+.prod-param { display: inline-flex; align-items: center; gap: 6px; }
+.prod-param .input { width: 84px; padding: 6px 8px; font-size: 15px; text-align: right; }
+.sim-form .btn.primary { margin-top: 4px; }
+.sim-h { font-size: 15px; font-weight: 600; margin: 20px 0 8px; }
+.sim-res { display: flex; flex-direction: column; }
+.sim-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.sim-l, .sim-r { display: flex; flex-direction: column; gap: 2px; }
+.sim-r { align-items: flex-end; text-align: right; }
+.sim-liq { font-size: 19px; font-weight: 600; }
+.premissas { margin: 12px 0 0; padding-left: 18px; line-height: 1.5; }
+@media (max-width: 559px) { .mk-grid { grid-template-columns: 1fr 1fr; gap: 10px; } .mk-val { font-size: 18px; } .mk-foot span.muted { display: none; } .sim-r { align-items: flex-start; text-align: left; } }

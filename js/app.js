@@ -3,6 +3,7 @@ import * as api from "./api.js";
 import { brl, incomeExpenseChart, lineChart, categoryBars } from "./charts.js";
 import * as F2 from "./fase2.js";
 import { icon, logo } from "./icons.js";
+import { mercadoView } from "./mercado.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -93,6 +94,7 @@ const NAV = [
   { href: "#/contas", ico: "bank", label: "Contas", short: "Contas" },
   { href: "#/cartoes", ico: "card", label: "Cartões" },
   { href: "#/relatorios", ico: "chart", label: "Relatórios" },
+  { href: "#/mercado", ico: "trend", label: "Mercado" },
   { href: "#/metas", ico: "target", label: "Metas" },
   { href: "#/orcamentos", ico: "budget", label: "Orçamentos" },
   { href: "#/fixas", ico: "repeat", label: "Contas fixas" },
@@ -111,7 +113,7 @@ function shell(route) {
     </nav>
     <main class="main" id="page"></main>
     <nav class="bottom-nav" aria-label="Menu">
-      ${BOTTOM.map((n) => `<a class="${n.href === "#/mais" ? (["mais", "categorias", "configuracoes", "cartoes", "relatorios", "metas", "orcamentos", "fixas"].some((r) => route.startsWith(r)) ? "active" : "") : active(n.href)}" href="${n.href}"><span class="ico">${icon(n.ico, 22)}</span>${n.short}</a>`).join("")}
+      ${BOTTOM.map((n) => `<a class="${n.href === "#/mais" ? (["mais", "categorias", "configuracoes", "cartoes", "relatorios", "mercado", "metas", "orcamentos", "fixas"].some((r) => route.startsWith(r)) ? "active" : "") : active(n.href)}" href="${n.href}"><span class="ico">${icon(n.ico, 22)}</span>${n.short}</a>`).join("")}
     </nav>
   </div>`;
   return $("#page");
@@ -139,6 +141,7 @@ async function router(opts) {
     else if (route.startsWith("metas")) await F2.goalsView(page);
     else if (route.startsWith("orcamentos")) await F2.budgetsView(page);
     else if (route.startsWith("fixas")) await F2.recurringView(page);
+    else if (route.startsWith("mercado")) await mercadoView(page, { api, toast, esc, brl, parseMoney });
     else if (route.startsWith("mais")) more(page);
     else if (route.startsWith("em-breve")) location.hash = "#/" + ({ recorrencias: "fixas" }[route.split("/")[1]] || route.split("/")[1] || "");
     else location.hash = "#/";
