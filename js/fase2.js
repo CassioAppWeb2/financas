@@ -689,7 +689,7 @@ function importPreview(prev, itens, dest, destLabel, after, totalDoc) {
 // Painel: alertas e cartões no dashboard
 // =====================================================================
 export function alertsHtml(alertas) {
-  alertas = (alertas || []).filter((a) => a.tipo !== "acerto");   // os acertos têm um quadro próprio
+  alertas = (alertas || []).filter((a) => a.tipo !== "acerto" && a.tipo !== "pendente");   // acertos e contas pendentes têm quadro próprio
   if (!alertas.length) return "";
   const cls = { alto: "bad", medio: "warn", bom: "ok" };
   return `<div class="card alerts" style="margin-bottom:14px"><h2 class="h-ico">${icon("bell", 18)} Alertas</h2>${alertas.map((a) => `<div class="alert ${cls[a.nivel] || ""}"><span>${a.icone}</span><span>${C.esc(a.texto)}</span></div>`).join("")}</div>`;
@@ -860,4 +860,87 @@ export function splitArea(host, payDefault) {
       });
     },
   };
+}
+
+// ---------------------------------------------------------------- PENDÊNCIAS (início)
+const diasEntre = (a, b) => Math.round((Date.parse(b + "T12:00:00Z") - Date.parse(a + "T12:00:00Z")) / 86400000);
+function quando(t, hoje) {
+  const n = diasEntre(t.data, hoje);
+  const verbo = t.tipo === "receita" ? "previsto" : "vence";
+  if (n > 1) return `${t.tipo === "receita" ? "atrasado" : "venceu"} há ${n} dias (${C.dateBR(t.data)})`;
+  if (n === 1) return `${t.tipo === "receita" ? "era para" : "venceu"} ontem`;
+  if (n === 0) return `${verbo} hoje`;
+  if (n === -1) return `${verbo} amanhã`;
+  return `${verbo} em ${C.dateBR(t.data)}`;
+}
+
+/** Quadro de pendências: contas atrasadas e dos próximos dias com 👎/👍, e acertos da família. */
+export async function pendingCard(host, membro, after) {
+  if (!host) return;
+  let d;
+  try { d = await C.api.rpc("app_pending", { membro_id: membro || "" }); } catch { host.innerHTML = ""; return; }
+  const all = [...d.atrasados, ...d.proximos];
+  const fam = (d.acertos_devo.length + d.acertos_recebo.length) > 0;
+  const atrasadoPagar = d.atrasados.filter((t) => t.tipo === "despesa").reduce((s, t) => s + Number(t.valor_cents), 0);
+  const atrasadoReceber = d.atrasados.filter((t) => t.tipo === "receita").reduce((s, t) => s + Number(t.valor_cents), 0);
+  if (!all.length && !fam) {
+    host.innerHTML = `<div class="pend-ok">${icon("check", 16)} Nada atrasado. Contas em dia.</div>`;
+    return;
+  }
+  const row = (t) => {
+    const late = t.data < d.hoje;
+    return `<div class="pend-item ${late ? "late" : ""}" data-id="${t.id}">
+      <div class="emoji">${t.icone || (t.tipo === "receita" ? "💰" : "🧾")}</div>
+      <div class="body"><div class="title">${C.esc(t.descricao || t.categoria || "Lançamento")}</div>
+        <div class="sub">${t.tipo === "receita" ? "A receber" : "A pagar"} · ${quando(t, d.hoje)}${t.conta ? ` · ${C.esc(t.conta)}` : ""}</div></div>
+      <div class="amount num ${t.tipo === "receita" ? "income" : "expense"}">${C.brl(t.valor_cents)}</div>
+      <button class="thumb" data-pay="${t.id}" aria-label="${t.tipo === "receita" ? "Marcar como recebido" : "Marcar como pago"}" title="${t.tipo === "receita" ? "Ainda não recebido — toque quando receber" : "Ainda não pago — toque quando pagar"}">${icon("down", 20)}</button>
+    </div>`;
+  };
+  const resumo = [atrasadoPagar && `<span class="expense">${C.brl(atrasadoPagar)} a pagar em atraso</span>`,
+    atrasadoReceber && `<span class="income">${C.brl(atrasadoReceber)} a receber em atraso</span>`].filter(Boolean).join(" · ");
+  host.innerHTML = `<section class="card pend" aria-label="Pendências">
+    <div class="pend-head"><h2 class="h-ico">${icon("clock", 18)} Pendências</h2>${resumo ? `<div class="small">${resumo}</div>` : ""}</div>
+    ${d.atrasados.length ? `<div class="pend-label late">Em atraso</div>${d.atrasados.map(row).join("")}` : ""}
+    ${d.proximos.length ? `<div class="pend-label">Próximos 7 dias</div>${d.proximos.map(row).join("")}` : ""}
+    ${fam ? `<div class="pend-label">Acertos da família</div><div id="pendAcertos"></div>` : ""}
+    ${all.length ? `<p class="small muted pend-tip">Pagou ou recebeu? Toque no ${icon("down", 15)} — ele vira ${icon("up", 15)} e o item sai da lista.</p>` : ""}
+  </section>`;
+  if (fam) debtsCard($("#pendAcertos", host), after, true);
+  host.querySelector(".pend").addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-pay]");
+    if (!b || b.disabled) return;
+    const it = b.closest(".pend-item");
+    b.disabled = true; b.classList.add("done"); b.innerHTML = icon("up", 20);
+    navigator.vibrate?.(20);
+    try {
+      await C.api.rpc("app_set_paid", { id: b.dataset.pay, pago: true });
+      const t = all.find((x) => x.id === b.dataset.pay);
+      C.toast(t?.tipo === "receita" ? "Recebido 👍" : "Pago 👍");
+      setTimeout(() => { it.classList.add("gone"); setTimeout(() => { it.remove(); after?.(); }, 350); }, 700);
+    } catch (y) {
+      b.disabled = false; b.classList.remove("done"); b.innerHTML = icon("down", 20); C.toast(y.message);
+    }
+  });
+}
+
+/** Botão "+": escolher o que lançar. */
+export function newEntryMenu(after) {
+  const opt = (k, ic, t, s) => `<button class="pick" data-k="${k}"><span class="pick-ico ${k}">${icon(ic, 20)}</span><span><b>${t}</b><span class="small muted">${s}</span></span></button>`;
+  C.modal(`<h2>Novo lançamento</h2><div class="picks">
+      ${opt("despesa", "wallet", "Despesa", "Algo que você já pagou")}
+      ${opt("receita", "download", "Receita", "Dinheiro que entrou")}
+      ${opt("apagar", "calendar", "Conta a pagar", "Vence numa data; eu lembro você")}
+      ${opt("areceber", "clock", "A receber", "Valor que ainda vai entrar")}
+      ${opt("transferencia", "repeat", "Transferência", "Entre suas contas")}
+    </div>`, (m, close) => {
+    m.querySelector(".picks").onclick = (e) => {
+      const k = e.target.closest("[data-k]")?.dataset.k;
+      if (!k) return;
+      close();
+      const preset = { despesa: { tipo: "despesa" }, receita: { tipo: "receita" }, apagar: { tipo: "despesa", pendente: true },
+        areceber: { tipo: "receita", pendente: true }, transferencia: { tipo: "transferencia" } }[k];
+      C.txForm(null, after, preset);
+    };
+  });
 }

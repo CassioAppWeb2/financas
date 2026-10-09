@@ -248,8 +248,8 @@ async function dashboard(page) {
   const quem = !family() || !state.membro ? "" : state.membro === "familia" ? "da família (conjuntas)" : mSel?.eu ? "suas" : `de ${mSel?.nome?.split(" ")[0] ?? ""}`;
   page.innerHTML = `
     <div class="page-head"><h1>${current ? `Olá${nome ? `, ${esc(nome)}` : ""} ` : "Dashboard"}</h1><div class="row">${memberSeg(() => dashboard(page))}<span id="mnav"></span></div></div>
+    <div id="pend"></div>
     ${current ? F2.alertsHtml(d.alertas) : ""}
-    <div id="acertos"></div>
     <div class="grid kpis" id="kpis">
       <button class="card kpi hero click" data-k="resultado"><div class="label">Resultado do mês</div><div class="value num">${brl(resultado)}</div><div class="hint">receitas − despesas ${current ? "até hoje" : ""}</div></button>
       <button class="card kpi click" data-k="receitas"><div class="label">Receitas</div><div class="value num income">${brl(d.receitas_cents)}</div>${d.receitas_previstas_cents ? `<div class="hint">+ ${brl(d.receitas_previstas_cents)} previstas</div>` : ""}</button>
@@ -278,10 +278,12 @@ async function dashboard(page) {
         <div class="amount num ${a.saldo_cents < 0 ? "expense" : ""}">${brl(a.saldo_cents)}</div></div>`).join("")}</div></div>
     </div>
     <div class="card" style="margin-top:14px"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Últimos lançamentos</h2><a href="#/lancamentos" class="small">Ver todos →</a></div>
-      <div class="list" id="recent"></div></div>`;
+      <div class="list" id="recent"></div></div>
+    <button class="fab" id="fab" aria-label="Novo lançamento" title="Novo lançamento">${icon("plus", 26)}</button>`;
   $("#mnav").appendChild(monthNav(() => dashboard(page)));
+  $("#fab").onclick = () => F2.newEntryMenu(async () => { await loadBoot(true); dashboard(page); });
   $("#kpis").onclick = (e) => { const b = e.target.closest("[data-k]"); if (b) F2.kpiDialog(b.dataset.k, d, { projetado, aPagar, aReceber, quem }, () => dashboard(page)); };
-  if (current && family()) F2.debtsCard($("#acertos"), () => dashboard(page));
+  if (current) F2.pendingCard($("#pend"), state.membro, async () => { await loadBoot(true); dashboard(page); });
   incomeExpenseChart($("#c1"), d.evolucao);
   if (d.por_categoria.length) categoryBars($("#c2"), d.por_categoria);
   else $("#c2").innerHTML = `<div class="empty">Nenhuma despesa neste mês.</div>`;
@@ -299,7 +301,8 @@ function txItem(t) {
     t.tipo === "pagamento_fatura" ? `${esc(t.conta)} → fatura ${esc(t.cartao)} · ${dateBR(t.data)}` :
     [family() && esc(memberLabel(t)), t.categoria && `${esc(t.categoria)}${t.subcategoria ? " › " + esc(t.subcategoria) : ""}`, onde, dateBR(t.data)].filter(Boolean).join(" · ");
   const icon = t.tipo === "transferencia" ? "🔁" : t.tipo === "investimento" ? "📈" : t.tipo === "resgate" ? "📥" : t.tipo === "pagamento_fatura" ? "💳" : t.icone || "•";
-  const prev = (t.data > todayISO() ? ' <span class="tag">previsto</span>' : "") +
+  const prev = (t.pendente ? ` <span class="tag ${t.data < todayISO() ? "bad" : "warn"}">${t.data < todayISO() ? "atrasado" : t.tipo === "receita" ? "a receber" : "a pagar"}</span>`
+      : t.data > todayISO() ? ' <span class="tag">previsto</span>' : "") +
     (t.acerto === "pendente" ? ` <span class="tag warn">a acertar${t.deve_para ? " c/ " + esc(t.deve_para.split(" ")[0]) : ""}</span>` : t.divisao_id ? ' <span class="tag">dividido</span>' : "");
   return `<div class="item click" data-id="${t.id}"><div class="emoji">${icon}</div>
     <div class="body"><div class="title">${esc(t.descricao)}${prev} ${t.origem === "whatsapp" ? '<span class="tag wa">WhatsApp</span>' : t.origem === "telegram" ? '<span class="tag tg">Telegram</span>' : t.origem === "recorrencia" ? '<span class="tag">fixa</span>' : t.origem === "importacao" ? '<span class="tag">importado</span>' : ""}</div><div class="sub">${sub}</div></div>
@@ -321,20 +324,24 @@ function defaultAccount(contas) {
   if (!family() || !pad || pad.membro_id === null || pad.membro_id === meId()) return pad || contas[0];
   return contas.find((a) => a.status === "ativa" && a.membro_id === meId() && a.tipo !== "investimento") || pad;
 }
-function txForm(t, after) {
+const FORMAS = [["", "—"], ["pix", "Pix"], ["debito", "Débito"], ["dinheiro", "Dinheiro"], ["boleto", "Boleto"], ["transferencia", "Transferência / TED"], ["outro", "Outro"]];
+const FORMA_LABEL = { pix: "Pix", debito: "Débito", dinheiro: "Dinheiro", boleto: "Boleto", transferencia: "Transferência", outro: "Outro", credito: "Crédito" };
+function txForm(t, after, preset = {}) {
   const b = state.boot, edit = Boolean(t?.id);
-  const tipo0 = t?.tipo || "despesa";
+  const tipo0 = t?.tipo || preset.tipo || "despesa";
+  let pend = edit ? Boolean(t.pendente) : Boolean(preset.pendente), sitTouched = edit || preset.pendente !== undefined;
   const contas = b.contas.contas.filter((a) => a.status === "ativa" || a.id === t?.conta_id);
   const opts = (arr, sel) => arr.map(([v, l]) => `<option value="${v}" ${v === sel ? "selected" : ""}>${esc(l)}</option>`).join("");
   modal(`
-    <h2>${edit ? "Editar lançamento" : "Novo lançamento"}</h2>
+    <h2>${edit ? "Editar lançamento" : preset.pendente ? (tipo0 === "receita" ? "Novo valor a receber" : "Nova conta a pagar") : "Novo lançamento"}</h2>
     <form id="txf" novalidate>
       <div class="field"><label>Tipo</label><select class="input" name="tipo" ${edit ? "disabled" : ""}>${opts(Object.entries(TIPOS), tipo0)}</select></div>
+      <div class="field desc-field"><label>Descrição</label><input class="input" name="descricao" maxlength="120" autocomplete="off" value="${esc((t?.descricao || "").replace(/ \(\d+\/\d+\)$/, ""))}" placeholder="Ex.: Mercado, aluguel, salário…">
+        <div class="sugs hidden" id="sugs" role="listbox" aria-label="Lançamentos anteriores parecidos"></div></div>
       <div class="row">
         <div class="field"><label>Valor (R$)</label><input class="input num" name="valor" inputmode="decimal" placeholder="0,00" value="${moneyInput(t?.valor_cents)}" ${edit && t.parcelas > 1 ? "disabled" : ""}></div>
-        <div class="field"><label>Data</label><input class="input" type="date" name="data" value="${t?.data || todayISO()}" ${edit && t.parcelas > 1 ? "disabled" : ""}></div>
+        <div class="field"><label class="lbl-data">Data</label><input class="input" type="date" name="data" value="${t?.data || todayISO()}" ${edit && t.parcelas > 1 ? "disabled" : ""}></div>
       </div>
-      <div class="field"><label>Descrição</label><input class="input" name="descricao" maxlength="120" value="${esc((t?.descricao || "").replace(/ \(\d+\/\d+\)$/, ""))}" placeholder="Ex.: Supermercado"></div>
       <div class="row cat-row">
         <div class="field"><label>Categoria</label><select class="input" name="categoria_id"></select></div>
         <div class="field"><label>Subcategoria</label><select class="input" name="subcategoria_id"></select></div>
@@ -343,6 +350,10 @@ function txForm(t, after) {
         <div class="field"><label class="lbl-conta">Conta</label><select class="input" name="conta_id" ${edit && t.cartao_id ? "disabled" : ""}>${opts([...contas.map((a) => [a.id, a.nome]), ...(edit && !t.cartao_id ? [] : (b.cartoes || []).map((k) => ["k:" + k.id, "💳 " + k.nome]))], t?.cartao_id ? "k:" + t.cartao_id : t?.conta_id || defaultAccount(contas)?.id)}</select></div>
         <div class="field dest-row"><label>Conta de destino</label><select class="input" name="conta_destino_id" ${edit ? "disabled" : ""}>${opts(contas.map((a) => [a.id, a.nome]), t?.conta_destino_id || contas.find((a) => !a.padrao)?.id)}</select></div>
         ${edit ? "" : `<div class="field parc-row"><label>Parcelas</label><input class="input num" name="parcelas" type="number" min="1" max="72" value="1"></div>`}
+      </div>
+      <div class="row sit-row">
+        <div class="field"><label>Situação</label><div class="seg sit" role="radiogroup"><button type="button" data-v="0"></button><button type="button" data-v="1"></button></div></div>
+        <div class="field forma-row"><label>Forma de pagamento</label><select class="input" name="forma">${opts(FORMAS, t?.forma_pagamento && t.forma_pagamento !== "credito" ? t.forma_pagamento : "")}</select></div>
       </div>
       ${family() ? `<div class="field memb-row"><label>De quem é?</label><select class="input" name="membro">
         ${b.familia.membros.map((m) => `<option value="${m.id}" ${(edit ? t.membro_id === m.id : m.eu) ? "selected" : ""}>${m.eu ? "Meu" : "De " + esc(m.nome)}</option>`).join("")}
@@ -380,13 +391,79 @@ function txForm(t, after) {
       const c = b.categorias.find((x) => x.id === f.categoria_id.value);
       f.subcategoria_id.innerHTML = `<option value="">—</option>` + opts((c?.subcategorias || []).map((s) => [s.id, s.nome]), t?.subcategoria_id);
     };
-    f.tipo.onchange = () => { fillCats(); toggleSplit(); }; f.categoria_id.onchange = fillSubs;
+    // situação (pago / a pagar) e forma de pagamento — só para contas, não para cartão
+    const sit = $(".sit", m);
+    const isCard = () => f.conta_id.value.startsWith("k:");
+    const syncSit = () => {
+      const tp = f.tipo.value, rec = tp === "receita";
+      const [b0, b1] = $$("button", sit);
+      b0.textContent = rec ? "Recebido" : "Pago"; b1.textContent = rec ? "A receber" : "A pagar";
+      b0.classList.toggle("on", !pend); b1.classList.toggle("on", pend);
+      b0.setAttribute("aria-checked", String(!pend)); b1.setAttribute("aria-checked", String(pend));
+      const show = (tp === "despesa" || tp === "receita") && !isCard() && !isSplit?.();
+      $(".sit-row", m).classList.toggle("hidden", !show);
+      $(".lbl-data", m).textContent = show && pend ? (rec ? "Previsto para" : "Vencimento") : "Data";
+    };
+    sit.onclick = (e) => { const v = e.target.closest("[data-v]"); if (!v) return; pend = v.dataset.v === "1"; sitTouched = true; syncSit(); };
+    f.data.addEventListener("change", () => { if (!sitTouched) { pend = f.data.value > todayISO(); syncSit(); } });
+    f.conta_id.addEventListener("change", syncSit);
+    f.tipo.onchange = () => { fillCats(); toggleSplit(); syncSit(); }; f.categoria_id.onchange = fillSubs;
     fillCats();
     // dividir a compra entre as pessoas
     const payDefault = () => f.conta_id.value.startsWith("k:") ? f.conta_id.value : "c:" + f.conta_id.value;
     const split = f.membro && !edit ? F2.splitArea($(".split-host", m), payDefault) : null;
     const isSplit = () => split && f.membro.value === "dividir" && f.tipo.value === "despesa";
-    const toggleSplit = () => { if (!split) return; $(".split-host", m).classList.toggle("hidden", !isSplit()); if (isSplit()) split.fill(parseMoney(f.valor.value)); };
+    const toggleSplit = () => { if (!split) return; $(".split-host", m).classList.toggle("hidden", !isSplit()); if (isSplit()) split.fill(parseMoney(f.valor.value)); syncSit(); };
+    syncSit();
+    // histórico: enquanto digita a descrição, mostra os últimos lançamentos parecidos para copiar
+    const sugs = $("#sugs", m);
+    let sugList = [], sugTimer = null, sugSeq = 0;
+    const hideSugs = () => sugs.classList.add("hidden");
+    const where = (x) => x.cartao ? `💳 ${esc(x.cartao)}` : [esc(x.conta || ""), FORMA_LABEL[x.forma_pagamento] || ""].filter(Boolean).join(" · ");
+    const showSugs = (list) => {
+      sugList = list;
+      if (!list.length) return hideSugs();
+      sugs.innerHTML = `<div class="sugs-head">${icon("history", 14)} Últimos parecidos — toque para copiar</div>` + list.map((x, k) => `<button type="button" class="sug" data-k="${k}" role="option">
+        <span class="emoji">${x.icone || "•"}</span>
+        <span class="body"><span class="title">${esc((x.descricao || "").replace(/ \(\d+\/\d+\)$/, ""))}</span>
+          <span class="sub">${[esc(x.subcategoria || x.categoria || ""), where(x), dateBR(x.data)].filter(Boolean).join(" · ")}</span></span>
+        <span class="amount num ${x.tipo === "receita" ? "income" : "expense"}">${brl(x.valor_cents)}</span></button>`).join("");
+      sugs.classList.remove("hidden");
+    };
+    if (!edit) {
+      f.descricao.addEventListener("input", () => {
+        clearTimeout(sugTimer);
+        const qv = f.descricao.value.trim();
+        if (qv.length < 2) return hideSugs();
+        sugTimer = setTimeout(async () => {
+          const my = ++sugSeq;
+          try { const r = await api.rpc("app_suggest", { q: qv, tipo: ["despesa", "receita"].includes(f.tipo.value) ? f.tipo.value : "" }); if (my === sugSeq) showSugs(r || []); } catch { hideSugs(); }
+        }, 220);
+      });
+      f.descricao.addEventListener("keydown", (e) => { if (e.key === "Escape") hideSugs(); });
+      f.descricao.addEventListener("blur", () => setTimeout(hideSugs, 200));
+      sugs.addEventListener("mousedown", (e) => e.preventDefault());
+      sugs.onclick = (e) => {
+        const k = e.target.closest("[data-k]")?.dataset.k;
+        const x = sugList[Number(k)];
+        if (!x) return;
+        if (f.tipo.value !== x.tipo) { f.tipo.value = x.tipo; fillCats(); }
+        f.descricao.value = (x.descricao || "").replace(/ \(\d+\/\d+\)$/, "");
+        if (x.categoria_id && [...f.categoria_id.options].some((o) => o.value === x.categoria_id)) { f.categoria_id.value = x.categoria_id; fillSubs(); }
+        if (x.subcategoria_id && [...f.subcategoria_id.options].some((o) => o.value === x.subcategoria_id)) f.subcategoria_id.value = x.subcategoria_id;
+        const pay = x.cartao_id ? "k:" + x.cartao_id : x.conta_id;
+        if (pay && [...f.conta_id.options].some((o) => o.value === pay && !o.disabled)) { f.conta_id.value = pay; f.conta_id.dispatchEvent(new Event("change")); }
+        if (!x.cartao_id) f.forma.value = FORMA_LABEL[x.forma_pagamento] ? x.forma_pagamento : "";
+        if (f.membro && f.membro.value !== "dividir") {
+          const mv = x.membro_id === null ? "familia" : x.membro_id;
+          if ([...f.membro.options].some((o) => o.value === mv)) f.membro.value = mv;
+        }
+        f.valor.value = moneyInput(x.valor_cents);
+        hideSugs(); syncSit();
+        f.valor.focus(); f.valor.select();
+        toast("Dados copiados — ajuste o valor se mudou");
+      };
+    }
     if (split) {
       f.membro.addEventListener("change", toggleSplit);
       f.valor.addEventListener("input", () => isSplit() && split.fill(parseMoney(f.valor.value)));
@@ -417,6 +494,10 @@ function txForm(t, after) {
         if (!edit) p.parcelas = Number(f.parcelas.value || 1);
       }
       if (tp === "transferencia" && !edit) p.conta_destino_id = f.conta_destino_id.value;
+      if (!$(".sit-row", m).classList.contains("hidden")) {
+        p.pendente = pend;
+        p.forma_pagamento = f.forma.value;
+      }
       if (f.membro && (tp === "despesa" || tp === "receita")) p.membro = f.membro.value;
       if (forcar) p.forcar = true;
       if (isSplit()) {
@@ -444,7 +525,7 @@ function txForm(t, after) {
           return;
         }
         if (r.status !== "created" && r.status !== "updated") throw new Error("Não foi possível salvar. Confira os dados.");
-        close(); toast(edit ? "Lançamento atualizado ✅" : r.lancamento?.fatura_vencimento ? `Registrado ✅ Entra na fatura de ${dateBR(r.lancamento.fatura_vencimento)}` : "Lançamento registrado ✅"); state.boot = null; after?.();
+        close(); toast(edit ? "Lançamento atualizado ✅" : r.lancamento?.pendente ? (tp === "receita" ? "Registrado como a receber ✅ Aparece nas pendências do início." : "Conta a pagar registrada ✅ Aparece nas pendências do início.") : r.lancamento?.fatura_vencimento ? `Registrado ✅ Entra na fatura de ${dateBR(r.lancamento.fatura_vencimento)}` : "Lançamento registrado ✅"); state.boot = null; after?.();
       } catch (ex) { err.textContent = ex.message; err.classList.remove("hidden"); }
     };
   });
@@ -494,7 +575,7 @@ async function transactions(page) {
   if ($("#fMemb")) $("#fMemb").onchange = () => load();
   let tm; $("#fBusca").oninput = (e) => { clearTimeout(tm); tm = setTimeout(() => { filt.busca = e.target.value; load(); }, 300); };
   bindTxClicks($("#txList"), { find: (fn) => data.find(fn) }, async () => { await loadBoot(true); load(); });
-  $("#fab").onclick = () => txForm(null, async () => { await loadBoot(true); load(); });
+  $("#fab").onclick = () => F2.newEntryMenu(async () => { await loadBoot(true); load(); });
   $("#imp").onclick = () => F2.importDialog({}, async () => { await loadBoot(true); load(); });
   $("#csv").onclick = () => {
     const rows = [["Data", "Tipo", "Descrição", "Categoria", "Subcategoria", "Conta", "Cartão", "De quem", "Valor"]].concat(
@@ -609,6 +690,10 @@ async function chat(page) {
  * Microfone: grava o áudio no celular/computador e envia ao servidor, que transcreve (Groq/Gemini) —
  * o mesmo caminho dos áudios do Telegram. Toque para gravar; enviar ou cancelar. Máximo de 2 minutos.
  */
+const micKeep = { stream: null, timer: null };
+function releaseMic() { clearTimeout(micKeep.timer); micKeep.stream?.getTracks().forEach((t) => t.stop()); micKeep.stream = null; }
+document.addEventListener("visibilitychange", () => { if (document.hidden) releaseMic(); });
+window.addEventListener("hashchange", () => { if (!location.hash.startsWith("#/assistente")) releaseMic(); });
 function setupMic(send) {
   const btn = $("#mic"), bar = $("#recbar"), timeEl = $("#recTime");
   const hideWhileRec = [$("#mic"), $("#txt"), $("#sendBtn")];
@@ -618,13 +703,28 @@ function setupMic(send) {
   }
   const pickMime = () => ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus", "audio/aac"].find((t) => MediaRecorder.isTypeSupported?.(t)) || "";
   let mr = null, stream = null, chunks = [], started = 0, tick = null, cancelled = false;
+  // Reaproveita a mesma permissão/microfone enquanto o app está aberto: o navegador só pergunta uma vez.
+  const getStream = async () => {
+    if (micKeep.stream && micKeep.stream.getAudioTracks().some((t) => t.readyState === "live")) {
+      clearTimeout(micKeep.timer); micKeep.stream.getAudioTracks().forEach((t) => (t.enabled = true));
+      return micKeep.stream;
+    }
+    micKeep.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    try { localStorage.setItem("micOk", "1"); } catch { /* sem armazenamento */ }
+    return micKeep.stream;
+  };
+  const releaseLater = () => {
+    micKeep.stream?.getAudioTracks().forEach((t) => (t.enabled = false));
+    clearTimeout(micKeep.timer);
+    micKeep.timer = setTimeout(releaseMic, 10 * 60_000);   // solta o microfone depois de 10 min sem uso
+  };
   const fmt = (ms) => { const s2 = Math.floor(ms / 1000); return `${Math.floor(s2 / 60)}:${String(s2 % 60).padStart(2, "0")}`; };
   const ui = (rec) => { bar.classList.toggle("hidden", !rec); hideWhileRec.forEach((e) => e.classList.toggle("hidden", rec)); };
-  const stopAll = () => { clearInterval(tick); stream?.getTracks().forEach((t) => t.stop()); stream = null; ui(false); };
+  const stopAll = () => { clearInterval(tick); if (stream) releaseLater(); stream = null; ui(false); };
   btn.onclick = async () => {
     if (mr) return;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      stream = await getStream();
     } catch (e) {
       toast(e?.name === "NotAllowedError" ? "Permita o uso do microfone nas configurações do navegador para gravar áudio." : "Não foi possível acessar o microfone.");
       return;
@@ -890,7 +990,7 @@ function more(page) {
 
 // ---------------------------------------------------------------- início
 F2.init({ api, state, loadBoot, modal, toast, confirmBox, esc, brl, dateBR, parseMoney, moneyInput, monthTitle, shiftMonth, monthNav, txItem, bindTxClicks,
-  family, memberSeg, memberLabel, todayISO, MESES, TIPOS, setRefresh: (fn) => { viewRefresh = fn; } });
+  family, memberSeg, memberLabel, todayISO, MESES, TIPOS, txForm, setRefresh: (fn) => { viewRefresh = fn; } });
 api.onAuth((s) => { if (!s) { state.boot = null; } });
 window.addEventListener("hashchange", router);
 router();
