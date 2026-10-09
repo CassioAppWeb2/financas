@@ -1,7 +1,7 @@
 // Service worker: guarda a "casca" do app para abrir rápido e offline.
 // Dados financeiros NUNCA são guardados em cache.
-const CACHE = "financas-v17";
-const SHELL = ["./", "index.html", "styles.css", "js/app.js", "js/api.js", "js/charts.js", "js/fase2.js", "js/export.js", "js/icons.js", "js/mercado.js", "js/simulador.js", "js/config.js", "manifest.webmanifest", "icons/icon-192.png"];
+const CACHE = "financas-v18";
+const SHELL = ["./", "index.html", "styles.css", "js/app.js", "js/api.js", "js/charts.js", "js/fase2.js", "js/export.js", "js/icons.js", "js/mercado.js", "js/simulador.js", "js/prefs.js", "js/config.js", "manifest.webmanifest", "icons/icon-192.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", (e) => {
   e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));

@@ -120,8 +120,8 @@ begin
 
   c := fe_cat_ensure(p_user, 'despesa', 'Transporte', '🚗', array['Transporte']);
   perform fe_sub_ensure(p_user, c, 'Combustível');
-  perform fe_sub_ensure(p_user, c, 'Uber e táxi', '{}', array['Uber','Taxi','Táxi']);
-  perform fe_sub_ensure(p_user, c, 'Ônibus e metrô', '{}', array['Transporte público','Onibus','Ônibus']);
+  perform fe_sub_ensure(p_user, c, 'Uber', '{}', array['Uber e táxi','Taxi','Táxi']);
+  perform fe_sub_ensure(p_user, c, 'Ônibus', '{}', array['Ônibus e metrô','Transporte público','Onibus']);
   perform fe_sub_ensure(p_user, c, 'Estacionamento');
   perform fe_sub_ensure(p_user, c, 'Pedágio');
   perform fe_sub_ensure(p_user, c, 'Manutenção');
@@ -162,13 +162,15 @@ begin
   c := fe_cat_ensure(p_user, 'despesa', 'Viagens', '✈️', array['Viagens','Viagem']);
   perform fe_sub_ensure(p_user, c, 'Passagens');
   perform fe_sub_ensure(p_user, c, 'Hospedagem');
-  perform fe_sub_ensure(p_user, c, 'Passeios na viagem');
+  perform fe_sub_ensure(p_user, c, 'Passeios', '{}', array['Passeios na viagem']);
   perform fe_sub_ensure(p_user, c, 'Alimentação em viagens');
-  perform fe_sub_ensure(p_user, c, 'Outros da viagem', array['Lazer','Lazer e entretenimento'], array['Viagens']);   -- a antiga Lazer > Viagens vem para cá
+  -- a antiga subcategoria Lazer > Viagens: os lançamentos vêm para Viagens (sem subcategoria)
+  perform fe_sub_to_cat(p_user, array['Lazer','Lazer e entretenimento'], array['Viagens','Outros da viagem'], c);
 
   c := fe_cat_ensure(p_user, 'despesa', 'Assinaturas e serviços', '📺', array['Assinaturas','Assinaturas e serviços']);
-  perform fe_sub_ensure(p_user, c, 'Streaming', array['Lazer','Lazer e entretenimento']);
-  perform fe_sub_ensure(p_user, c, 'Música');
+  perform fe_sub_ensure(p_user, c, 'Netflix');
+  perform fe_sub_ensure(p_user, c, 'Spotify', '{}', array['Música']);
+  perform fe_sub_ensure(p_user, c, 'Outros streamings', array['Lazer','Lazer e entretenimento'], array['Streaming']);
   perform fe_sub_ensure(p_user, c, 'Aplicativos');
   perform fe_sub_ensure(p_user, c, 'Armazenamento em nuvem');
 
@@ -191,14 +193,13 @@ begin
   perform fe_sub_ensure(p_user, c, 'Ração');
   perform fe_sub_ensure(p_user, c, 'Veterinário');
   perform fe_sub_ensure(p_user, c, 'Banho e tosa');
-  perform fe_sub_ensure(p_user, c, 'Medicamentos do pet');
+  perform fe_sub_ensure(p_user, c, 'Medicamentos', '{}', array['Medicamentos do pet']);
 
   c := fe_cat_ensure(p_user, 'despesa', 'Impostos e taxas', '🧾', array['Impostos','Impostos e taxas']);
   perform fe_sub_ensure(p_user, c, 'IPTU');
   perform fe_sub_ensure(p_user, c, 'IPVA');
-  perform fe_sub_ensure(p_user, c, 'Tarifas bancárias', array['Financeiro','Dívidas e empréstimos'], array['Tarifas']);
-  perform fe_sub_ensure(p_user, c, 'IOF', array['Financeiro','Dívidas e empréstimos']);
-  perform fe_sub_ensure(p_user, c, 'Outras taxas');
+  perform fe_sub_ensure(p_user, c, 'Taxas bancárias', array['Financeiro','Dívidas e empréstimos'], array['IOF','Tarifas bancárias']);
+  perform fe_sub_ensure(p_user, c, 'Tarifas', array['Financeiro','Dívidas e empréstimos']);
 
   c := fe_cat_ensure(p_user, 'despesa', 'Seguros', '🛡️', array['Seguros','Seguro']);
   perform fe_sub_ensure(p_user, c, 'Seguro do carro');
@@ -237,7 +238,7 @@ begin
   c := fe_cat_ensure(p_user, 'receita', 'Negócios e vendas', '🛍️', array['Vendas','Negócios e vendas']);
   perform fe_sub_ensure(p_user, c, 'Vendas');
   perform fe_sub_ensure(p_user, c, 'Prestação de serviços');
-  perform fe_sub_ensure(p_user, c, 'Faturamento do negócio');
+  perform fe_sub_ensure(p_user, c, 'Faturamento de negócio próprio', '{}', array['Faturamento do negócio']);
   perform fe_sub_ensure(p_user, c, 'Pró-labore');
   -- a antiga categoria "Pró-labore" vira subcategoria aqui
   perform fe_cat_merge_into_sub(p_user, 'receita', array['Pró-labore','Pro-labore','Prolabore'], c, 'Pró-labore');
@@ -254,7 +255,7 @@ begin
   perform fe_sub_ensure(p_user, c, 'Equipamentos');
 
   c := fe_cat_ensure(p_user, 'receita', 'Benefícios e auxílios', '🎁', array['Benefícios','Benefícios e auxílios']);
-  perform fe_sub_ensure(p_user, c, 'Vale ou benefício em dinheiro');
+  perform fe_sub_ensure(p_user, c, 'Vale ou benefício recebido em dinheiro', '{}', array['Vale ou benefício em dinheiro']);
   perform fe_sub_ensure(p_user, c, 'Auxílios');
 
   c := fe_cat_ensure(p_user, 'receita', 'Aposentadoria e pensão', '🧓', array['Aposentadoria','Aposentadoria e pensão']);
@@ -270,6 +271,22 @@ begin
   perform fe_sub_ensure(p_user, c, 'Presentes em dinheiro');
   perform fe_sub_ensure(p_user, c, 'Prêmios');
   perform fe_sub_ensure(p_user, c, 'Receitas eventuais');
+end $$;
+
+-- subcategoria antiga (em uma das categorias de origem) -> lançamentos vão para a categoria p_to, sem subcategoria
+create or replace function public.fe_sub_to_cat(p_user uuid, p_from_cats text[], p_subs text[], p_to uuid) returns void
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare r record;
+begin
+  for r in select s.id from subcategories s join categories c on c.id = s.category_id
+           where s.user_id = p_user and s.archived_at is null and c.id <> p_to
+             and fe_norm(regexp_replace(c.name, ' \(antiga [0-9a-f]{4}\)$', '')) = any (select fe_norm(x) from unnest(p_from_cats) x)
+             and fe_norm(s.name) = any (select fe_norm(x) from unnest(p_subs) x) loop
+    update transactions set category_id = p_to, subcategory_id = null where subcategory_id = r.id;
+    update recurring_transactions set category_id = p_to, subcategory_id = null where subcategory_id = r.id;
+    update establishment_categories set category_id = p_to, subcategory_id = null where subcategory_id = r.id;
+    update subcategories set archived_at = now(), name = left(name || ' (antiga ' || left(r.id::text, 4) || ')', 80) where id = r.id;
+  end loop;
 end $$;
 
 -- categoria antiga inteira -> vira uma subcategoria dentro de outra
@@ -330,12 +347,9 @@ declare v_src text; v_new text;
 begin
   select pg_get_functiondef(p.oid) into v_src from pg_proc p where proname = 'fe_resolve_category';
   if v_src not like '%fe_category_alias%' then
-    v_new := replace(v_src, '    if category_id is null then  -- o nome informado pode ser de uma subcategoria',
-'    if category_id is null and fe_category_alias(v_kind, p_cat) is not null then   -- nome antigo ("Moradia", "Lazer"...)
-      select c.id into category_id from categories c
-        where c.user_id = p_user and c.kind = v_kind and c.archived_at is null and fe_norm(c.name) = fe_norm(fe_category_alias(v_kind, p_cat));
-    end if;
-    if category_id is null then  -- o nome informado pode ser de uma subcategoria');
+    -- antes da busca por subcategoria (com ou sem o comentário original), tenta o nome antigo da categoria
+    v_new := regexp_replace(v_src, E'(    if category_id is null then[^\\n]*\\n      select s\\.category_id)',
+E'    if category_id is null and fe_category_alias(v_kind, p_cat) is not null then\n      select c.id into category_id from categories c\n        where c.user_id = p_user and c.kind = v_kind and c.archived_at is null and fe_norm(c.name) = fe_norm(fe_category_alias(v_kind, p_cat));\n    end if;\n\\1');
     if v_new = v_src then raise exception 'fe_resolve_category inesperado'; end if;
     execute v_new;
   end if;
@@ -350,5 +364,12 @@ begin
   end loop;
 end $$;
 
+-- lançamentos antigos de "Streaming": os de Netflix e Spotify vão para as subcategorias próprias
+update transactions t set subcategory_id = n.id
+  from subcategories o, subcategories n
+  where t.subcategory_id = o.id and o.name = 'Outros streamings' and n.category_id = o.category_id
+    and ((n.name = 'Netflix' and fe_norm(coalesce(t.description,'')) like '%netflix%')
+      or (n.name = 'Spotify' and fe_norm(coalesce(t.description,'')) like '%spotify%'));
+
 revoke all on function public.fe_sub_move(uuid, uuid, text), public.fe_cat_merge(uuid, uuid), public.fe_cat_ensure(uuid, text, text, text, text[]),
-  public.fe_sub_ensure(uuid, uuid, text, text[], text[]), public.fe_cat_merge_into_sub(uuid, text, text[], uuid, text) from public, anon, authenticated;
+  public.fe_sub_ensure(uuid, uuid, text, text[], text[]), public.fe_cat_merge_into_sub(uuid, text, text[], uuid, text), public.fe_sub_to_cat(uuid, text[], text[], uuid) from public, anon, authenticated;

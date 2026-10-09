@@ -66,7 +66,7 @@ interface Ctx {
 const SUB_ICON: Record<string, string> = {
   Supermercado: "🛒", Padaria: "🥖", Restaurante: "🍽️", Delivery: "🛵", Lanches: "🥪", Combustível: "⛽", Uber: "🚕",
   "Transporte público": "🚌", Energia: "💡", Água: "🚿", Internet: "🌐", Aluguel: "🏠", Medicamentos: "💊",
-  Streaming: "📺", Roupas: "👕", Calçados: "👟", Viagens: "✈️", Cinema: "🎬", Cursos: "🎓",
+  Streaming: "📺", Netflix: "📺", Spotify: "🎧", "Outros streamings": "📺", Roupas: "👕", Calçados: "👟", Viagens: "✈️", Cinema: "🎬", Cursos: "🎓",
 };
 
 const YES = /^(sim|s|isso|pode|pode sim|confirmo|confirma|confirmado|ok|okay|claro|isso mesmo|correto|certo|registra|registrar|manda|bora|exato|positivo|uhum|aham|yes)\b/;
