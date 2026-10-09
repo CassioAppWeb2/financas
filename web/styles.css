@@ -528,3 +528,21 @@ button.card.kpi { display: flex; flex-direction: column; justify-content: flex-s
 .sug .title { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sug .sub { font-size: 12px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sug .amount { font-weight: 600; font-size: 14px; white-space: nowrap; }
+
+/* botão-resumo das pendências */
+.pend-btn { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 12px 14px; margin-bottom: 12px; box-shadow: var(--shadow); transition: border-color .15s; }
+.pend-btn:hover { border-color: color-mix(in srgb, var(--brand) 35%, var(--line)); }
+.pend-btn-ico { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; flex: none; }
+.pend-btn.late { border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); background: color-mix(in srgb, var(--danger) 5%, var(--surface)); }
+.pend-btn.late .pend-btn-ico { background: color-mix(in srgb, var(--danger) 14%, var(--surface)); color: var(--danger); }
+.pend-btn.soon .pend-btn-ico { background: var(--accent-soft); color: var(--accent); }
+.pend-btn-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pend-btn-txt b { font-weight: 600; }
+.pend-btn.late .pend-btn-txt b { color: var(--danger); }
+.pend-btn-txt span { font-size: 13px; color: var(--ink-2); }
+.pend-btn-cta { display: inline-flex; align-items: center; gap: 2px; font-size: 13px; font-weight: 600; color: var(--brand); flex: none; }
+.pend-btn-cta svg.i { display: inline-block; }
+svg.rot90 { transform: rotate(90deg); }
+.pend { border-left-width: 1px; }
+.pend > .pend-label:first-child { margin-top: 0; }

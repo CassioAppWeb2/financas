@@ -102,7 +102,7 @@ O campo *Forma de pagamento* (Pix, Débito, Dinheiro, Boleto…) fica salvo e ap
     chaves: { "a pagar": 4, "a receber": 4, venciment: 3, lembret: 3, atrasad: 3, pendenc: 4, "joinha": 3, "polegar": 3, "marcar como pag": 4, "como paga": 4, "como pago": 3, "como recebid": 3, "ja paguei": 2, "conta futura": 3, "despesa futura": 3, "nao paguei": 2, "previsto": 2 },
     texto: `⏰ *Contas a pagar e a receber*
 *Cadastrar:* botão *+* → *Conta a pagar* (ou *A receber*) → descrição, valor e *Vencimento*. Uma data futura já vira “a pagar” sozinha. No formulário, o campo *Situação* alterna entre *Pago* e *A pagar*.
-*Lembrete no Início:* o quadro *Pendências* mostra o que está *em atraso* e o que vence *nos próximos 7 dias*, cada um com um 👎 vermelho (= ainda não pago).
+*Lembrete no Início:* no alto aparece o botão de pendências (vermelho se houver algo em atraso; verde “Nada atrasado” se estiver tudo em dia). Toque em *Ver* para abrir a lista do que está *em atraso* e do que vence *nos próximos 7 dias*, cada um com um 👎 vermelho (= ainda não pago).
 *Pagou?* Toque no 👎: ele vira 👍 verde, o valor sai do saldo e o item sai da lista. Pelo chat também funciona: “paguei a conta de luz” confirma a que estava pendente (sem lançar de novo).
 • Conta a pagar não mexe no saldo até você confirmar.
 • Contas fixas pagas por conta (aluguel, internet, salário) entram como pendentes todo mês; as do cartão são automáticas (entram na fatura).`,
@@ -143,7 +143,7 @@ Eu leio as compras, sugiro as categorias e mostro uma *prévia*: confira, ajuste
     texto: `🤝 *Dividir gastos e acertar*
 • *Pelo chat*: “jantar de 150 no Nubank dividido com a Bruna” (cada um fica com 75; a outra pessoa fica devendo a parte dela), ou “250 no mercado, metade no meu cartão e metade no da Bruna”.
 • *No app*: no *+*, em *De quem é?*, escolha *Dividir entre nós…* e informe a parte e o meio de pagamento de cada um.
-• Quem deve para quem aparece em *Pendências → Acertos da família*. Quando acertarem, toque em *Paguei*/*Recebi* (informe data e forma) — ou *OK* para dispensar sem lançar nada.
+• Quem deve para quem aparece no botão de pendências do Início (toque em *Ver* → *Acertos da família*). Quando acertarem, toque em *Paguei*/*Recebi* (informe data e forma) — ou *OK* para dispensar sem lançar nada.
 • Pelo chat: “quanto devo?”, “acertei com a Bruna”.`,
   },
   {
@@ -194,7 +194,7 @@ Eu leio as compras, sugiro as categorias e mostro uma *prévia*: confira, ajuste
     id: "inicio", titulo: "Tela de Início (painéis)",
     chaves: { "tela inicial": 1, inicio: 2, painel: 3, paineis: 3, dashboard: 3, "saldo projetado": 4, "compromissos futuros": 4, "resultado do mes": 4, grafico: 2, kpi: 2 },
     texto: `🏠 *Início*
-• *Pendências*: contas atrasadas e dos próximos dias (com 👎/👍) e acertos da família.
+• *Botão de pendências* (no alto): mostra quantas contas estão atrasadas ou vencendo e os acertos da família; toque em *Ver* para abrir a lista com 👎/👍.
 • Painéis: *Resultado do mês* (receitas − despesas), *Receitas*, *Despesas*, *Saldo em contas*, *Compromissos futuros* (contas a pagar e faturas até o fim do mês), *Faturas do mês* e *Saldo projetado* (estimativa para o fim do mês).
 • *Toque em qualquer painel* para ver a lista do que compõe aquele valor.
 • As setas no alto trocam o mês; o filtro de pessoas aparece no modo família.
