@@ -25,10 +25,12 @@ language plpgsql security definer set search_path = public, pg_temp as $$
 declare s jsonb; n int := 0;
 begin
   for s in select * from jsonb_array_elements(coalesce(p->'series','[]')) loop
+    -- algumas séries trazem mais de um valor no mesmo dia: fica o último da lista
     insert into market_series(code, date, value, date_end)
-      select s->>'code', (x->>'data')::date, (x->>'valor')::numeric, nullif(x->>'data_fim','')::date
-      from jsonb_array_elements(coalesce(s->'pontos','[]')) x
+      select distinct on ((x->>'data')::date) s->>'code', (x->>'data')::date, (x->>'valor')::numeric, nullif(x->>'data_fim','')::date
+      from jsonb_array_elements(coalesce(s->'pontos','[]')) with ordinality as e(x, ord)
       where x->>'data' is not null and x->>'valor' ~ '^-?[0-9]+(\.[0-9]+)?$'
+      order by (x->>'data')::date, ord desc
     on conflict (code, date) do update set value = excluded.value, date_end = excluded.date_end;
     get diagnostics n = row_count;
     insert into market_meta(code, updated_at, last_date)
