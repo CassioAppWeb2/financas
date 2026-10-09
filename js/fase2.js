@@ -874,7 +874,8 @@ function quando(t, hoje) {
   return `${verbo} em ${C.dateBR(t.data)}`;
 }
 
-/** Quadro de pendências: contas atrasadas e dos próximos dias com 👎/👍, e acertos da família. */
+let pendOpen = false;   // a lista fica aberta enquanto a pessoa estiver usando o app
+/** Pendências: botão-resumo no início; ao tocar, abre a lista (contas com 👎/👍 e acertos da família). */
 export async function pendingCard(host, membro, after) {
   if (!host) return;
   let d;
@@ -884,9 +885,17 @@ export async function pendingCard(host, membro, after) {
   const atrasadoPagar = d.atrasados.filter((t) => t.tipo === "despesa").reduce((s, t) => s + Number(t.valor_cents), 0);
   const atrasadoReceber = d.atrasados.filter((t) => t.tipo === "receita").reduce((s, t) => s + Number(t.valor_cents), 0);
   if (!all.length && !fam) {
-    host.innerHTML = `<div class="pend-ok">${icon("check", 16)} Nada atrasado. Contas em dia.</div>`;
+    host.innerHTML = `<div class="pend-ok" role="status">${icon("check", 16)} Nada atrasado. Contas em dia.</div>`;
     return;
   }
+  const nA = d.atrasados.length, nP = d.proximos.length;
+  const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
+  const deve = d.acertos_recebo.reduce((s2, x) => s2 + Number(x.total_cents), 0), devo = d.acertos_devo.reduce((s2, x) => s2 + Number(x.total_cents), 0);
+  const titulo = nA ? `${plural(nA, "pendência em atraso", "pendências em atraso")}${nP ? ` · ${nP} vencendo` : ""}`
+    : nP ? `${plural(nP, "conta vencendo", "contas vencendo")} nos próximos 7 dias` : "Acertos da família pendentes";
+  const detalhe = [atrasadoPagar && `${C.brl(atrasadoPagar)} a pagar`, atrasadoReceber && `${C.brl(atrasadoReceber)} a receber`,
+    !nA && nP && C.brl(d.proximos.reduce((s2, t) => s2 + Number(t.valor_cents), 0)),
+    deve && `te devem ${C.brl(deve)}`, devo && `você deve ${C.brl(devo)}`].filter(Boolean).join(" · ");
   const row = (t) => {
     const late = t.data < d.hoje;
     return `<div class="pend-item ${late ? "late" : ""}" data-id="${t.id}">
@@ -899,14 +908,19 @@ export async function pendingCard(host, membro, after) {
   };
   const resumo = [atrasadoPagar && `<span class="expense">${C.brl(atrasadoPagar)} a pagar em atraso</span>`,
     atrasadoReceber && `<span class="income">${C.brl(atrasadoReceber)} a receber em atraso</span>`].filter(Boolean).join(" · ");
-  host.innerHTML = `<section class="card pend" aria-label="Pendências">
-    <div class="pend-head"><h2 class="h-ico">${icon("clock", 18)} Pendências</h2>${resumo ? `<div class="small">${resumo}</div>` : ""}</div>
+  host.innerHTML = `<button type="button" class="pend-btn ${nA ? "late" : "soon"}" aria-expanded="${pendOpen}" aria-controls="pendList">
+      <span class="pend-btn-ico">${icon(nA ? "bell" : "clock", 18)}</span>
+      <span class="pend-btn-txt"><b>${titulo}</b>${detalhe ? `<span>${detalhe}</span>` : ""}</span>
+      <span class="pend-btn-cta">${pendOpen ? "Ocultar" : "Ver"} ${icon("right", 16, pendOpen ? "rot90" : "")}</span>
+    </button>
+    <section class="card pend ${pendOpen ? "" : "hidden"}" id="pendList" aria-label="Pendências">
     ${d.atrasados.length ? `<div class="pend-label late">Em atraso</div>${d.atrasados.map(row).join("")}` : ""}
     ${d.proximos.length ? `<div class="pend-label">Próximos 7 dias</div>${d.proximos.map(row).join("")}` : ""}
     ${fam ? `<div class="pend-label">Acertos da família</div><div id="pendAcertos"></div>` : ""}
     ${all.length ? `<p class="small muted pend-tip">Pagou ou recebeu? Toque no ${icon("down", 15)} — ele vira ${icon("up", 15)} e o item sai da lista.</p>` : ""}
   </section>`;
   if (fam) debtsCard($("#pendAcertos", host), after, true);
+  host.querySelector(".pend-btn").onclick = () => { pendOpen = !pendOpen; pendingCard(host, membro, after); };
   host.querySelector(".pend").addEventListener("click", async (e) => {
     const b = e.target.closest("[data-pay]");
     if (!b || b.disabled) return;
