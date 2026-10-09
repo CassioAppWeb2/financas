@@ -90,6 +90,29 @@ function varTxt(x: { valor: number; historico: { data: string; valor: number }[]
   return ` (${v >= 0 ? "+" : ""}${pctBR(v)} em ~30 dias)`;
 }
 
+const NUMW: Record<string, number> = { um: 1, uma: 1, dois: 2, duas: 2, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10, onze: 11, doze: 12, quinze: 15, dezoito: 18, vinte: 20, trinta: 30 };
+/** Prazo em meses ("2 anos", "18 meses", "um ano e meio", "até dezembro de 2027"), ou null se não disse. */
+export function parsePrazo(text: string, hoje = new Date()): number | null {
+  const f = fold(text);
+  const clamp = (n: number) => Math.min(Math.max(1, Math.round(n)), 600);
+  if (/\b(um )?ano e meio\b/.test(f)) return 18;
+  if (/\bmeio ano\b|\bsemestre\b/.test(f)) return 6;
+  const pz = /(\d+(?:[.,]\d+)?|um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|quinze|dezoito|vinte|trinta)\s*(anos?|mes(?:es)?)\b/.exec(f);
+  if (pz) { const n = Number(pz[1].replace(",", ".")) || NUMW[pz[1]] || 1; return clamp(/ano/.test(pz[2]) ? n * 12 : n); }
+  const ate = /\bate (janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?: de)? ?(\d{4})?/.exec(f);
+  if (ate) {
+    const mi = ["janeiro", "fevereiro", "marco", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"].indexOf(ate[1]);
+    let y = ate[2] ? Number(ate[2]) : hoje.getFullYear();
+    let n = (y - hoje.getFullYear()) * 12 + mi - hoje.getMonth();
+    if (n <= 0 && !ate[2]) n += 12;
+    return n > 0 ? clamp(n) : null;
+  }
+  if (/\b(um|1) ano\b|\banual\b/.test(f)) return 12;
+  const so = /^\s*(\d{1,3})\s*$/.exec(f);           // resposta só com número: meses
+  if (so) return clamp(Number(so[1]));
+  return null;
+}
+
 /** Entende o pedido de simulação. */
 export function parseSimulation(text: string) {
   const f = fold(text);
@@ -105,12 +128,7 @@ export function parseSimulation(text: string) {
   if (/ipca\s*\+|ipca mais|tesouro ipca/.test(f)) produtos.push({ ...PRODUTOS.ipca, taxa: pctNear(/ipca\s*(?:\+|mais)\s*(\d+[.,]?\d*)/) ?? 6, _taxaPadrao: !/ipca\s*(?:\+|mais)\s*\d/.test(f) });
 
   // prazo
-  const NUM: Record<string, number> = { um: 1, uma: 1, dois: 2, duas: 2, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10, doze: 12, quinze: 15, vinte: 20, trinta: 30 };
-  let meses = 12;
-  const pz = /(\d+|um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|doze|quinze|vinte|trinta)\s*(anos?|mes(?:es)?)\b/.exec(f);
-  if (pz) { const n = Number(pz[1]) || NUM[pz[1]] || 1; meses = /ano/.test(pz[2]) ? n * 12 : n; }
-  else if (/\b(meio ano|seis meses)\b/.test(f)) meses = 6;
-  meses = Math.min(Math.max(1, Math.round(meses)), 600);
+  const meses = parsePrazo(text) ?? 12;
 
   // valores (sem os percentuais e o prazo)
   const limpo = text.replace(/\d+[.,]?\d*\s*%/g, " ").replace(/ipca\s*(\+|mais)\s*\d+[.,]?\d*/gi, " ")
@@ -221,3 +239,59 @@ export const AGENT_RULES = `REGRAS SOBRE INVESTIMENTOS (obrigatórias, sem exce�
 - Termine respostas sobre investimentos com: "${AVISO_CURTO}"`;
 
 export { PREMISSAS };
+
+
+// ---------------------------------------------------------------------------
+// Comparativo do saldo de uma conta com aplicações ("o que eu tenho no Banrisul, comparado com o mercado")
+// ---------------------------------------------------------------------------
+const INVESTISH = /\b(compar\w*|render\w*|rende|rendimento\w*|aplic\w*|invest\w*|indices?|indicadores?|mercado|simul\w*|selic|cdi|poupanca|cdb|lci|lca|tesouro|juros)\b/;
+const OWN_MONEY = /\b(meu saldo|saldo (?:da|na|das|nas|de|do|total)|o que (?:eu )?tenho|que (?:eu )?tenho|tenho (?:na|no|em|aplicado|guardado|parado)|dinheiro (?:parado|guardado|na conta)|valor (?:que )?(?:eu )?tenho|minhas? contas?|minha reserva)\b/;
+
+/** Conta citada no texto (aceita apelidos: "Banrisul" ↔ "Conta banri"). */
+export function matchAccount(text: string, contas: string[]): string | null {
+  const words = fold(text).split(/[^\p{L}\d]+/u).filter((w) => w.length >= 3);
+  let best: string | null = null, score = 0;
+  for (const nome of contas) {
+    const toks = fold(nome).split(/[^\p{L}\d]+/u).filter((t) => t.length >= 4 && !/^(conta|banco|corrente|digital|poupanca|carteira)$/.test(t));
+    const fullName = fold(nome).trim();
+    let sc = 0;
+    if (fold(text).includes(fullName) && fullName.length >= 4) sc = 3;
+    for (const t of toks) for (const w of words) if (w.length >= 4 && (w.startsWith(t) || t.startsWith(w))) sc = Math.max(sc, 2);
+    if (/carteira/.test(fullName) && /\bcarteira\b/.test(fold(text))) sc = Math.max(sc, 2);
+    if (sc > score) { score = sc; best = nome; }
+  }
+  return best;
+}
+
+export function wantsBalanceCompare(text: string, contas: string[]): { conta: string | null } | null {
+  const f = fold(text);
+  if (!INVESTISH.test(f)) return null;
+  const conta = matchAccount(text, contas);
+  if (conta || OWN_MONEY.test(f)) return { conta };
+  return null;
+}
+
+export function balanceCompareReply(o: { conta: string; saldo_cents: number; meses: number; texto: string; m: Mercado }): string {
+  const ind = simInputs(o.m);
+  const saldo = o.saldo_cents / 100;
+  const p = parseSimulation(o.texto);
+  const produtos = p.produtos.length ? p.produtos : [
+    { ...PRODUTOS.poupanca }, { ...PRODUTOS.tesouro_selic }, { ...PRODUTOS.cdb, nome: "CDB", _ex: true }, { ...PRODUTOS.lci, _ex: true },
+  ];
+  const prazo = o.meses % 12 === 0 ? `${o.meses / 12} ${o.meses === 12 ? "ano" : "anos"}` : `${o.meses} ${o.meses === 1 ? "mês" : "meses"}`;
+  const linhas = produtos.map((prod: any) => {
+    const r: any = simular({ inicial: saldo, meses: o.meses, produto: prod, ind });
+    if (r.erro) return `• *${prod.nome}*: ${r.erro}`;
+    const base = prod.tipo === "cdi" ? `${pctBR(r.taxa_aa)} a.a.` : prod.tipo === "poupanca" ? `${pctBR(ind.poupanca_mes!, 4)} a.m.` : `${pctBR(r.taxa_aa)} a.a.`;
+    return `• *${r.produto}*${prod._ex ? " _(exemplo)_" : ""} — ${base}: *${brl(r.liquido_cents)}* (+${brl(r.rendimento_liquido_cents)}${r.isento ? ", isento de IR" : `, já descontado IR de ${brl(r.ir_cents)}`})`;
+  });
+  const real = ind.ipca12 != null ? saldo / Math.pow(1 + ind.ipca12 / 100, o.meses / 12) : null;
+  return `🏦 *${o.conta}* — saldo hoje: *${brl(o.saldo_cents)}*
+📊 Comparativo em *${prazo}*, com os índices de hoje (Banco Central):
+
+• *Parado na conta (sem rendimento)*: ${brl(o.saldo_cents)}${real != null ? ` — com inflação de ${pctBR(ind.ipca12!)} ao ano, o poder de compra equivaleria a ~${brl(Math.round(real * 100))} de hoje` : ""}
+${linhas.join("\n")}
+
+_Estimativas: taxas de hoje mantidas no prazo todo; sem custódia, IOF ou variação de preço antes do vencimento. Os percentuais “exemplo” variam conforme o banco — diga o que você viu (ex.: “CDB 110% do CDI”)._
+${AVISO_CURTO}`;
+}

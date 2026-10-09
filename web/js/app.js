@@ -70,6 +70,15 @@ function modal(html, onMount) {
   back.innerHTML = `<div class="modal" role="dialog" aria-modal="true">${html}</div>`;
   const close = () => back.remove();
   back.addEventListener("click", (e) => { if (e.target === back) close(); });
+  // evita salvar duas vezes com toques repetidos no botão (ex.: conta criada em duplicidade)
+  back.addEventListener("submit", (e) => {
+    const f = e.target;
+    if (f.dataset.busy === "1") { e.preventDefault(); e.stopImmediatePropagation(); return; }
+    f.dataset.busy = "1";
+    const btns = [...f.querySelectorAll("button.primary, button:not([type])")];
+    btns.forEach((b) => (b.disabled = true));
+    setTimeout(() => { f.dataset.busy = ""; btns.forEach((b) => (b.disabled = false)); }, 1500);
+  }, true);
   document.body.appendChild(back);
   onMount?.(back, close);
   $("input, select, textarea", back)?.focus();

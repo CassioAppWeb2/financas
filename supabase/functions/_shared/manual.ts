@@ -256,6 +256,7 @@ Se o problema continuar, anote o que aconteceu e o horário e avise quem adminis
 • *Indicadores oficiais* do Banco Central: Selic, CDI, IPCA, IGP-M, poupança, dólar e euro, com gráfico recente. O app busca os números sozinho e atualiza a cada 6 horas (ou toque em *Atualizar*).
 • *Simulador*: informe valor inicial, aporte mensal e prazo, marque as aplicações (poupança, CDB, LCI/LCA, Tesouro Selic, prefixado, IPCA+) e toque em *Simular*. Mostra investido, imposto de renda e valor líquido de cada uma, lado a lado.
 • Pelo chat: “qual a Selic hoje?”, “quanto está o dólar?”, “quanto rende 10 mil no CDB 110% do CDI em 2 anos?”, “o que é LCI?”.
+• *Comparar o seu saldo*: “compare o saldo da conta Banrisul com o mercado em 1 ano” — eu pego o saldo da conta e mostro quanto ficaria em cada aplicação (e parado na conta). Se faltar a conta ou o prazo, eu pergunto.
 • Importante: o app *não recomenda nem escolhe* investimentos — ele só apresenta informações e simulações. A decisão é sempre sua.`,
   },
   {

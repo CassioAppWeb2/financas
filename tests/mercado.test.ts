@@ -121,3 +121,39 @@ describe("NUNCA recomenda", () => {
     expect(r.reply).not.toContain("não recomendo");
   });
 });
+
+describe("comparativo do saldo da conta com o mercado", () => {
+  test("pergunta o prazo e depois compara (conta citada por apelido)", async () => {
+    await q(`select set_config('request.jwt.claim.sub', $1, false)`, user);
+    await db.rpc("fe_admin", user, { acao: "salvar_conta", dados: { nome: "Conta banri", tipo: "corrente", saldo_inicial: 100000 } });
+    const r1 = await say("Jarbas, considerando o valor que eu tenho aplicado na conta do Banrisul, me apresenta um comparativo entre os índices de mercado.");
+    expect(r1.reply).toContain("Conta banri");
+    expect(r1.reply).toContain("Por quanto tempo");
+    const r2 = await say("2 anos");
+    expect(r2.reply).toContain("Comparativo em *2 anos*");
+    expect(r2.reply).toContain("Parado na conta");
+    expect(r2.reply).toContain("Poupança");
+    expect(r2.reply).toContain("R$ 100.000,00");
+    expect(r2.reply).toContain("não é recomendação");
+  });
+  test("com prazo na pergunta responde direto", async () => {
+    const r = await say("quanto renderia o saldo do banrisul em 6 meses no CDB 110% do CDI?");
+    expect(r.reply).toContain("Comparativo em *6 meses*");
+    expect(r.reply).toContain("CDB 110% do CDI");
+  });
+  test("várias contas: pergunta qual", async () => {
+    await db.rpc("fe_admin", user, { acao: "salvar_conta", dados: { nome: "Nubank", tipo: "digital", saldo_inicial: 3000 } });
+    const r = await say("compare meu saldo com os investimentos do mercado por 1 ano");
+    expect(r.reply).toContain("qual conta");
+    const r2 = await say("nubank");
+    expect(r2.reply).toContain("*Nubank*");
+    expect(r2.reply).toContain("1 ano");
+  });
+  test("simulação sem prazo pergunta o prazo", async () => {
+    const r = await say("quanto rende 5 mil na poupança?");
+    expect(r.reply).toContain("Por quanto tempo");
+    const r2 = await say("18 meses");
+    expect(r2.reply).toContain("Simulação");
+    expect(r2.reply).toContain("18 meses");
+  });
+});

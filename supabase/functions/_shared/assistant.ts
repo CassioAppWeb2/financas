@@ -14,7 +14,7 @@ import { resolveDate, addDays } from "./dates.ts";
 import { brl, dateBR, norm, pct } from "./text.ts";
 import { stripVocative, detectRename, asksName, validName } from "./naming.ts";
 import { isAppQuestion, manualAnswer, topicIndex } from "./manual.ts";
-import { classifyInvest, indicatorsReply, simulationReply, adviceReply, explainReply } from "./invest.ts";
+import { classifyInvest, indicatorsReply, simulationReply, adviceReply, explainReply, parsePrazo, wantsBalanceCompare, matchAccount, balanceCompareReply } from "./invest.ts";
 import { ensureMarket } from "./mercado.ts";
 
 export interface AssistantDeps {
@@ -50,6 +50,7 @@ type Pending = (
   | { kind: "agent"; history: GeminiContent[] }
   | { kind: "confirm_value"; interp: Interpretation }
   | { kind: "agent_confirm"; call: AgentCall; history: GeminiContent[] }
+  | { kind: "sim_info"; texto: string; falta: "prazo" | "conta"; modo: "saldo" | "simular"; conta?: string | null; saldo_cents?: number; options?: string[] }
 ) & { fila?: QueueItem[] };
 
 interface Outcome extends AssistantReply { pending?: Pending | null; }
@@ -134,14 +135,57 @@ async function investFlow(c: Ctx): Promise<Outcome | null> {
   const text = c.msg.content;
   if (LANC_VERB.test(norm(text))) return null;
   const kind = classifyInvest(text);
+  if (kind === "advice") return { reply: adviceReply(await market(c)) };
+  // "o que eu tenho na conta X comparado com o mercado" -> comparativo do saldo
+  const bc = kind !== "explain" ? wantsBalanceCompare(text, c.uc.contas) : null;
+  if (bc) return balanceCompareFlow(c, { texto: text, conta: bc.conta });
   if (!kind) return null;
   if (kind === "explain") { const r = explainReply(text); return r ? { reply: r } : null; }
-  let m = null;
-  try { m = await ensureMarket(c.deps.db, c.user, c.deps.marketFetch ?? fetch); } catch (e) { console.warn("mercado:", (e as Error).message); }
-  if (kind === "advice") return { reply: adviceReply(m) };
+  if (kind === "simulate" && parsePrazo(text) === null) {
+    return { reply: "Por quanto tempo você quer simular? Ex.: *6 meses*, *1 ano*, *2 anos*.", pending: { kind: "sim_info", texto: text, falta: "prazo", modo: "simular" } };
+  }
+  const m = await market(c);
   if (!m) return { reply: "Não consegui buscar os indicadores do Banco Central agora. Tente de novo em alguns minutos." };
   if (kind === "simulate") return { reply: simulationReply(text, m) };
   return { reply: indicatorsReply(m, text) };
+}
+
+async function market(c: Ctx) {
+  try { return await ensureMarket(c.deps.db, c.user, c.deps.marketFetch ?? fetch); }
+  catch (e) { console.warn("mercado:", (e as Error).message); return null; }
+}
+
+/** Compara o saldo de uma conta com aplicações; pergunta a conta e o prazo se faltarem. */
+async function balanceCompareFlow(c: Ctx, st: { texto: string; conta?: string | null; saldo_cents?: number; meses?: number }): Promise<Outcome> {
+  if (st.saldo_cents === undefined) {
+    const bal = await c.deps.db.rpc<any>("fe_balances", c.user, {});
+    const ativas = (bal.contas ?? []).filter((a: any) => a.status === "ativa");
+    if (!st.conta) {
+      if (/\b(total|todas|tudo|somad)/.test(norm(st.texto)) || ativas.length === 0) { st.conta = "Todas as contas"; st.saldo_cents = Number(bal.total_cents); }
+      else if (ativas.length === 1) { st.conta = ativas[0].nome; st.saldo_cents = Number(ativas[0].saldo_cents); }
+      else {
+        const options = ativas.map((a: any) => a.nome);
+        return {
+          reply: `Com o saldo de qual conta você quer comparar?\n${ativas.map((a: any) => `• ${a.nome}: ${brl(a.saldo_cents)}`).join("\n")}\n• Total: ${brl(bal.total_cents)}`,
+          pending: { kind: "sim_info", texto: st.texto, falta: "conta", modo: "saldo", options },
+        };
+      }
+    } else {
+      const a = ativas.find((x: any) => x.nome === st.conta);
+      st.saldo_cents = Number(a?.saldo_cents ?? 0);
+    }
+  }
+  if (!(st.saldo_cents! > 0)) return { reply: `A conta *${st.conta}* está sem saldo positivo hoje (${brl(st.saldo_cents ?? 0)}), então não há valor para comparar. Quer simular com outro valor? Ex.: “quanto rende 10 mil em 1 ano?”` };
+  const meses = st.meses ?? parsePrazo(st.texto);
+  if (!meses) {
+    return {
+      reply: `Saldo de *${st.conta}*: ${brl(st.saldo_cents!)}. Por quanto tempo você quer comparar? Ex.: *6 meses*, *1 ano*, *2 anos*.`,
+      pending: { kind: "sim_info", texto: st.texto, falta: "prazo", modo: "saldo", conta: st.conta, saldo_cents: st.saldo_cents },
+    };
+  }
+  const m = await market(c);
+  if (!m) return { reply: "Não consegui buscar os indicadores do Banco Central agora. Tente de novo em alguns minutos." };
+  return { reply: balanceCompareReply({ conta: st.conta!, saldo_cents: st.saldo_cents!, meses, texto: st.texto, m }), pending: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -542,6 +586,23 @@ async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
 
   switch (p.kind) {
     case "confirm_create": if (yes) return createFlow(p.interp, c); break;
+    case "sim_info": {
+      if (p.falta === "conta") {
+        const conta = /\b(total|todas|tudo)\b/.test(n) ? "Todas as contas" : matchAccount(text, p.options ?? []) ?? (p.options ?? []).find((o) => norm(o) === n) ?? null;
+        if (!conta) return { reply: `Não encontrei essa conta. Escolha uma destas: ${(p.options ?? []).join(", ")} ou *total*.`, pending: p };
+        if (conta === "Todas as contas") {
+          const bal = await c.deps.db.rpc<any>("fe_balances", c.user, {});
+          return balanceCompareFlow(c, { texto: p.texto, conta, saldo_cents: Number(bal.total_cents) });
+        }
+        return balanceCompareFlow(c, { texto: p.texto, conta });
+      }
+      const meses = parsePrazo(text);
+      if (!meses) return { reply: "Não entendi o prazo. Diga, por exemplo: *6 meses*, *1 ano* ou *2 anos*.", pending: p };
+      if (p.modo === "saldo") return balanceCompareFlow(c, { texto: p.texto, conta: p.conta, saldo_cents: p.saldo_cents, meses });
+      const m = await market(c);
+      if (!m) return { reply: "Não consegui buscar os indicadores do Banco Central agora. Tente de novo em alguns minutos.", pending: null };
+      return { reply: simulationReply(`${p.texto} por ${meses} meses`, m), pending: null };
+    }
     case "confirm_value": {
       if (yes) return saveFlow(p.interp, c, { valor_confirmado: true });
       const a = extractAmount(text);
