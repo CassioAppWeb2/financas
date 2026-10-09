@@ -5,6 +5,7 @@ import type { EngineDb, IncomingMessage } from "./types.ts";
 import { handleMessage, readStatement, type AssistantDeps } from "./assistant.ts";
 import { transcribeAudio, StatementError, type AiConfig } from "./ai.ts";
 import type { AudioStore } from "./storage.ts";
+import { ensureMarket } from "./mercado.ts";
 
 export const CORS = {
   "access-control-allow-origin": "*",
@@ -24,6 +25,7 @@ export interface AppDeps {
   store?: AudioStore;
   extract?: AssistantDeps["extract"];
   getUserId: (token: string) => Promise<string | null>;
+  marketFetch?: typeof fetch;
 }
 
 // limite simples por instância: 30 mensagens/minuto por usuário
@@ -49,6 +51,12 @@ export function createAppHandler(deps: AppDeps) {
 
     let body: any;
     try { body = await req.json(); } catch { return json({ error: "JSON inválido" }, 400); }
+
+    // Tela "Mercado": indicadores do Banco Central (busca de novo se estiverem velhos ou se pedirem)
+    if (body?.acao === "mercado") {
+      try { return json(await ensureMarket(deps.db, userId, deps.marketFetch ?? fetch, body.forcar === true)); }
+      catch (e) { return json({ error: `Não consegui buscar os indicadores (${(e as Error).message}).` }, 502); }
+    }
 
     // Tela "Importar extrato": lê PDF/foto da fatura e devolve os itens para a prévia (nada é gravado aqui)
     if (body?.acao === "ler_extrato") {
@@ -88,7 +96,7 @@ export function createAppHandler(deps: AppDeps) {
     if (!content.trim()) return json({ error: "Mensagem vazia" }, 400);
 
     const msg: IncomingMessage = { user_id: userId, channel: "app", type, content, timestamp: new Date().toISOString(), audio_provider, audio_path };
-    const reply = await handleMessage(msg, { db: deps.db, ai: deps.ai });
+    const reply = await handleMessage(msg, { db: deps.db, ai: deps.ai, marketFetch: deps.marketFetch });
     return json(type === "audio" ? { ...reply, transcricao: content, audio_path } : reply);
   };
 }
@@ -407,5 +415,20 @@ export function createTelegramHandler(deps: TelegramDeps) {
     const work = process(m).catch((e) => console.error("telegram:", e?.message));
     if (deps.waitUntil) deps.waitUntil(work); else await work;
     return new Response("ok", { status: 200 });
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Indicadores públicos (GET /assistant/mercado): só leitura, dados públicos do Banco Central
+// ---------------------------------------------------------------------------
+export function createMarketHandler(deps: { db: EngineDb; marketFetch?: typeof fetch; systemUser?: string }) {
+  return async (req: Request): Promise<Response> => {
+    if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
+    if (req.method !== "GET") return json({ error: "Método não permitido" }, 405);
+    try {
+      const m = await ensureMarket(deps.db, deps.systemUser ?? "00000000-0000-0000-0000-000000000000", deps.marketFetch ?? fetch);
+      const resumo = Object.fromEntries(Object.entries(m.indicadores).map(([k, x]) => [k, { nome: x.nome, valor: x.valor, unidade: x.unidade, data: x.data }]));
+      return json({ fonte: m.fonte, atualizado_em: m.atualizado_em, indicadores: resumo });
+    } catch (e) { return json({ error: (e as Error).message }, 502); }
   };
 }

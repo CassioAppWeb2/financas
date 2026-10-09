@@ -2,7 +2,7 @@
 //   POST /functions/v1/assistant            -> app (chat e áudio do app)
 //   GET|POST /functions/v1/assistant/whatsapp -> webhook da Meta WhatsApp Cloud API
 //   POST /functions/v1/assistant/telegram     -> webhook do robô do Telegram
-import { createAppHandler, createTelegramHandler, createWhatsAppHandler } from "../_shared/channels.ts";
+import { createAppHandler, createMarketHandler, createTelegramHandler, createWhatsAppHandler } from "../_shared/channels.ts";
 import { postgrestEngine, getUserIdFromToken } from "../_shared/engine.ts";
 import { supabaseAudioStore } from "../_shared/storage.ts";
 import { SUPABASE_URL, SERVICE_KEY, ANON_KEY, aiConfig, waConfig, tgConfig } from "../_shared/config.ts";
@@ -17,10 +17,12 @@ const waitUntil = typeof EdgeRuntime !== "undefined" ? (p: Promise<unknown>) => 
 const app = createAppHandler({ db, ai: aiConfig, store, getUserId: (token) => getUserIdFromToken(SUPABASE_URL, ANON_KEY, token) });
 const whatsapp = createWhatsAppHandler({ db, ai: aiConfig, store, wa: waConfig, waitUntil });
 const telegram = createTelegramHandler({ db, ai: aiConfig, store, tg: tgConfig, waitUntil });
+const mercado = createMarketHandler({ db });
 
 Deno.serve((req) => {
   const path = new URL(req.url).pathname.replace(/\/+$/, "");
   if (path.endsWith("/whatsapp")) return whatsapp(req);
   if (path.endsWith("/telegram")) return telegram(req);
+  if (path.endsWith("/mercado")) return mercado(req);
   return app(req);
 });

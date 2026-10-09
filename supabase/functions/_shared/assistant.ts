@@ -14,12 +14,16 @@ import { resolveDate, addDays } from "./dates.ts";
 import { brl, dateBR, norm, pct } from "./text.ts";
 import { stripVocative, detectRename, asksName, validName } from "./naming.ts";
 import { isAppQuestion, manualAnswer, topicIndex } from "./manual.ts";
+import { classifyInvest, indicatorsReply, simulationReply, adviceReply, explainReply } from "./invest.ts";
+import { ensureMarket } from "./mercado.ts";
 
 export interface AssistantDeps {
   db: EngineDb;
   ai?: AiConfig;
   /** leitura de fatura/extrato (substituível nos testes) */
   extract?: (bytes: Uint8Array, mime: string, uc: UserContext) => Promise<Statement>;
+  /** acesso à internet para os indicadores do Banco Central (substituível nos testes) */
+  marketFetch?: typeof fetch;
 }
 
 interface ImportDest { cartao?: string; conta?: string; }
@@ -86,6 +90,7 @@ export async function handleMessage(msg: IncomingMessage, deps: AssistantDeps): 
   try {
     if (msg.document) out = await documentFlow(c);
     if (!out && content) out = await namingFlow(c);
+    if (!out && content) out = await investFlow(c);
     if (!out && content && isAppQuestion(content) && !findAmounts(content).some((a) => a.role === "valor" && a.value > 0)) out = await appHelpFlow(c);
     if (!out && !content && voc.chamou) out = { reply: `Oi${uc.nome ? `, ${uc.nome}` : ""}! Estou aqui. 👋 Pode falar: um gasto, um recebimento ou uma pergunta sobre suas finanças.` };
     if (!out && !content) out = { reply: "Não consegui entender o áudio. Pode repetir ou digitar?" };
@@ -119,6 +124,24 @@ export async function handleMessage(msg: IncomingMessage, deps: AssistantDeps): 
   if (out.pending !== undefined) await db.rpc("fe_chat_state", user, { pending: out.pending });
   await db.rpc("fe_chat_append", user, { role: "assistant", channel: msg.channel, content: out.reply, cards: out.cards ?? null });
   return { reply: out.reply, cards: out.cards, intent: out.intent };
+}
+
+// ---------------------------------------------------------------------------
+// Investimentos: indicadores, simulações e explicações — nunca recomendação
+// ---------------------------------------------------------------------------
+const LANC_VERB = /^(?:eu |nos |a gente )?(gastei|gastamos|paguei|pagamos|comprei|compramos|recebi|recebemos|ganhei|transferi|investi|investimos|apliquei|guardei|resgatei|depositei|saquei|vendi)\b/;
+async function investFlow(c: Ctx): Promise<Outcome | null> {
+  const text = c.msg.content;
+  if (LANC_VERB.test(norm(text))) return null;
+  const kind = classifyInvest(text);
+  if (!kind) return null;
+  if (kind === "explain") { const r = explainReply(text); return r ? { reply: r } : null; }
+  let m = null;
+  try { m = await ensureMarket(c.deps.db, c.user, c.deps.marketFetch ?? fetch); } catch (e) { console.warn("mercado:", (e as Error).message); }
+  if (kind === "advice") return { reply: adviceReply(m) };
+  if (!m) return { reply: "Não consegui buscar os indicadores do Banco Central agora. Tente de novo em alguns minutos." };
+  if (kind === "simulate") return { reply: simulationReply(text, m) };
+  return { reply: indicatorsReply(m, text) };
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +320,7 @@ const HELP = `Sou seu assistente financeiro. Basta conversar comigo:
 
 Também entendo áudio — no app (🎙️), no WhatsApp e no Telegram.
 
+📈 *Mercado*: “qual a Selic hoje?”, “quanto está o dólar?”, “quanto rende 10 mil no CDB 110% do CDI em 2 anos?”, “o que é LCI?” — eu mostro números e explicações; *não recomendo investimentos*, a decisão é sua.
 ❓ *Dúvidas sobre o app*: pergunte como fazer qualquer coisa — “como conecto o Telegram?”, “como instalo no celular?”, “o microfone fica pedindo permissão”, “como importo a fatura?”. Digite *manual* para ver todos os assuntos.`;
 
 function soon(what: string): Outcome {

@@ -250,6 +250,15 @@ Se o problema continuar, anote o que aconteceu e o horário e avise quem adminis
 • O app não acessa sua conta no banco e não pede senha de banco — nunca informe senhas de banco aqui.`,
   },
   {
+    id: "mercado", titulo: "Mercado: indicadores e simulador de investimentos",
+    chaves: { mercado: 3, indicador: 4, simulador: 4, simular: 3, "tela mercado": 4, cotac: 3, "atualiza a selic": 3 },
+    texto: `📈 *Mercado* (menu *Mercado*)
+• *Indicadores oficiais* do Banco Central: Selic, CDI, IPCA, IGP-M, poupança, dólar e euro, com gráfico recente. O app busca os números sozinho e atualiza a cada 6 horas (ou toque em *Atualizar*).
+• *Simulador*: informe valor inicial, aporte mensal e prazo, marque as aplicações (poupança, CDB, LCI/LCA, Tesouro Selic, prefixado, IPCA+) e toque em *Simular*. Mostra investido, imposto de renda e valor líquido de cada uma, lado a lado.
+• Pelo chat: “qual a Selic hoje?”, “quanto está o dólar?”, “quanto rende 10 mil no CDB 110% do CDI em 2 anos?”, “o que é LCI?”.
+• Importante: o app *não recomenda nem escolhe* investimentos — ele só apresenta informações e simulações. A decisão é sempre sua.`,
+  },
+  {
     id: "consultas", titulo: "Perguntas que posso responder",
     chaves: { "o que voce faz": 4, "o que posso perguntar": 4, "o que voce sabe": 4, funcionalidad: 3, "tudo que": 1, "pra que serve": 2, "para que serve": 2 },
     texto: `🧠 *O que você pode me perguntar*

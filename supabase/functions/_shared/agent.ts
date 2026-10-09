@@ -6,6 +6,10 @@ import type { EngineDb, UserContext } from "./types.ts";
 import { geminiCall, type AiConfig } from "./ai.ts";
 import { brl, dateBR, norm } from "./text.ts";
 import { searchManual, TOPICS } from "./manual.ts";
+import { ensureMarket, simInputs } from "./mercado.ts";
+import { AGENT_RULES, looksLikeAdvice, adviceReply, AVISO_CURTO } from "./invest.ts";
+// @ts-ignore módulo JS compartilhado com a tela do app
+import { PRODUTOS, simular } from "../../../web/js/simulador.js";
 
 export type GeminiContent = { role: "user" | "model"; parts: any[] };
 export interface AgentCall { name: string; args: Record<string, any> }
@@ -61,6 +65,15 @@ export const TOOLS = [
   }, ["meta"]),
   fn("definir_orcamento", "Define o orçamento mensal de uma categoria de despesa (0 remove).", { categoria: S("Categoria"), valor: N("Valor por mês em reais") }, ["categoria", "valor"]),
   fn("definir_meta_economia_mensal", "Define quanto a família quer economizar por mês (0 remove).", { valor: N("Valor em reais") }, ["valor"]),
+  fn("indicadores_mercado", "Indicadores oficiais do dia (Banco Central): Selic, CDI, IPCA 12 meses e do mês, IGP-M, poupança, TR, dólar e euro.", {}),
+  fn("simular_investimento", "Simula quanto um valor renderia (bruto, IR e líquido) com os indicadores de hoje. Só números, sem recomendar.", {
+    produto: S("poupanca | cdb | lci | tesouro_selic | prefixado | ipca"),
+    valor_inicial: N("Valor inicial em reais (0 se só aportes)"),
+    aporte_mensal: N("Aporte mensal em reais (opcional)"),
+    meses: N("Prazo em meses"),
+    percentual_cdi: N("Para cdb/lci: % do CDI (ex.: 110)"),
+    taxa: N("Para prefixado: taxa % a.a.; para ipca: taxa acima da inflação % a.a."),
+  }, ["produto", "meses"]),
   fn("manual_do_app", "Consulta o manual do aplicativo (como instalar, atualizar, microfone, Telegram, família, cartões, faturas, importar, contas a pagar, relatórios etc.). Use SEMPRE que a pessoa tiver dúvida de como usar o app ou algo não funcionar.", {
     pergunta: S("A dúvida da pessoa, com as palavras dela"),
   }, ["pergunta"]),
@@ -83,8 +96,9 @@ Regras:
 - Pessoas da família: ${membros}.
 - Contas: ${uc.contas.join(", ") || "nenhuma"}. Cartões: ${(uc.cartoes ?? []).join(", ") || "nenhum"}.
 - Lançar gastos/receitas e consultas comuns o app já faz sozinho; se a pessoa pedir isso, diga para escrever naturalmente, ex.: "gastei 50 no mercado", "quanto gastei este mês?".
-- Perguntas gerais sobre finanças (o que é CDI, como economizar...) responda em até 5 linhas, sem inventar números da pessoa; para números dela, use resumo_do_mes.
+- Perguntas gerais sobre finanças (o que é CDI, como economizar...) responda em até 5 linhas, sem inventar números da pessoa; para números dela, use resumo_do_mes. Para taxas e cotações use SEMPRE indicadores_mercado (nunca valores de memória).
 - Dúvidas de como usar o app (telas, botões, instalar, microfone, Telegram, família, erros): chame manual_do_app e explique em passos curtos, usando só o que o manual diz. Não invente telas ou botões; se o manual não cobrir, diga que não sabe e sugira falar com quem administra o app.
+${AGENT_RULES}
 - Nunca diga que fez algo que não fez. Ao concluir um cadastro, confirme em 1–2 linhas com os dados gravados.`;
 }
 
@@ -198,6 +212,19 @@ export async function execTool(call: AgentCall, c: Ctx): Promise<Record<string, 
     case "definir_meta_economia_mensal":
       await admin("perfil", { meta_economia: String(a.valor ?? 0) });
       return { ok: true, meta_economia_mensal: brl(Math.round(Number(a.valor ?? 0) * 100)) };
+    case "indicadores_mercado": {
+      const m = await ensureMarket(c.db, c.user);
+      return { fonte: m.fonte, atualizado_em: m.atualizado_em, indicadores: Object.fromEntries(Object.entries(m.indicadores).map(([k, x]) => [k, { nome: x.nome, valor: x.valor, unidade: x.unidade, data: x.data }])) };
+    }
+    case "simular_investimento": {
+      const m = await ensureMarket(c.db, c.user);
+      const base = (PRODUTOS as any)[String(a.produto ?? "").toLowerCase()];
+      if (!base) return { erro: "Produto desconhecido. Use: poupanca, cdb, lci, tesouro_selic, prefixado ou ipca." };
+      const prod = { ...base, ...(a.percentual_cdi ? { pct: Number(a.percentual_cdi) } : {}), ...(a.taxa ? { taxa: Number(a.taxa) } : {}) };
+      const r = simular({ inicial: Number(a.valor_inicial ?? 0), mensal: Number(a.aporte_mensal ?? 0), meses: Math.max(1, Math.round(Number(a.meses ?? 12))), produto: prod, ind: simInputs(m) });
+      if (r.erro) return { erro: r.erro };
+      return { produto: r.produto, taxa_ao_ano: r.taxa_aa.toFixed(2) + "%", investido: brl(r.investido_cents), bruto: brl(r.bruto_cents), imposto: r.isento ? "isento" : brl(r.ir_cents), liquido: brl(r.liquido_cents), rendimento_liquido: brl(r.rendimento_liquido_cents), premissa: "taxas de hoje mantidas; estimativa" };
+    }
     case "manual_do_app": {
       const r = searchManual(String(a.pergunta ?? ""), 3);
       return r.length ? { topicos: r.map((x) => ({ titulo: x.topic.titulo, texto: x.topic.texto })) }
@@ -304,6 +331,8 @@ export async function runAgent(text: string, history: GeminiContent[], c: Ctx, c
     const said = parts.map((p) => p.text).filter(Boolean).join("\n").trim();
     if (!calls.length) {
       contents.push({ role: "model", parts: parts.length ? parts : [{ text: said || "…" }] });
+      // trava: se a IA tentar recomendar investimento, troca pela resposta neutra
+      if (said && looksLikeAdvice(said)) return { reply: adviceReply(null), done: true };
       const asking = /\?\s*$/.test(said) || /\b(qual|quais|me (diga|informe|passe)|preciso saber|confirma)\b/i.test(said);
       return { reply: said || "Não consegui concluir. Pode explicar de outro jeito?", history: asking ? contents : undefined, done: !asking };
     }

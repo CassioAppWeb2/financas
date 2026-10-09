@@ -3,6 +3,7 @@
 // NÃO é usado em produção.
 import { localEngine } from "./local_engine.ts";
 import { createAppHandler } from "../supabase/functions/_shared/channels.ts";
+import { fakeMarketFetch } from "./fake_market.ts";
 
 const db = localEngine();
 const sql = db.sql;
@@ -29,7 +30,7 @@ const fakeExtract = process.env.FAKE_EXTRACT ? async () => ({
     { data: today, descricao: "PAGAMENTO RECEBIDO", valor: -400 },
   ],
 }) : undefined;
-const assistant = createAppHandler({ db, getUserId: async (t) => tokens.get(t)?.id ?? null, extract: fakeExtract });
+const assistant = createAppHandler({ db, getUserId: async (t) => tokens.get(t)?.id ?? null, extract: fakeExtract, marketFetch: fakeMarketFetch() });
 
 Bun.serve({
   port: PORT,
