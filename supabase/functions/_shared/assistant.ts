@@ -341,6 +341,23 @@ async function createFlow(i: Interpretation, c: Ctx, extra: Record<string, unkno
     };
   }
   if (i.dividir && tipo === "despesa") return splitFlow(i, c);
+  // "paguei o aluguel" com o aluguel já a pagar: confirma o pendente em vez de lançar de novo
+  if ((tipo === "despesa" || tipo === "receita") && !i.cartao && i.forma_pagamento !== "credito" && !((i.parcelas ?? 1) > 1)
+      && !extra.forcar && (!i.data || i.data <= c.uc.hoje)) {
+    const m = await c.deps.db.rpc<any>("fe_match_pending", c.user, {
+      tipo, valor: i.valor, data: i.data, categoria: i.categoria, subcategoria: i.subcategoria, descricao: i.descricao, estabelecimento: i.estabelecimento,
+    });
+    if (m?.id) {
+      await c.deps.db.rpc("fe_set_paid", c.user, { id: m.id, pago: true, valor: i.valor, origem: origin(c) });
+      const nome = m.descricao || m.subcategoria || m.categoria || "lançamento";
+      const mudou = Math.round(i.valor * 100) !== Number(m.valor_cents) ? ` (era ${brl(m.valor_cents)})` : "";
+      return {
+        reply: tipo === "despesa"
+          ? `👍 Marquei como *paga* a conta **${nome}** de ${brl(Math.round(i.valor * 100))}${mudou}, que vencia em ${dateBR(m.data)}. Ela saiu das pendências.`
+          : `👍 Marquei como *recebido* **${nome}** de ${brl(Math.round(i.valor * 100))}${mudou}, previsto para ${dateBR(m.data)}.`,
+      };
+    }
+  }
   const r = await c.deps.db.rpc<any>("fe_create_transaction", c.user, enginePayload(i, c, extra));
   switch (r.status) {
     case "created": return createdReply(r, i, c);
