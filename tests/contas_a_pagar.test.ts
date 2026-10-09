@@ -29,7 +29,7 @@ describe("a pagar", () => {
   test("despesa a pagar atrasada não mexe no saldo até o 👍", async () => {
     const antes = await saldo(u);
     const r = await asUser<any>(u, "app_save_transaction", { tipo: "despesa", valor: 150, descricao: "Conta de luz", categoria_id: null, pendente: true, data: addDays(hoje, -2),
-      ...{ categoria_id: (await q(`select id from categories where user_id = $1 and name = 'Moradia'`, u))[0].id } });
+      ...{ categoria_id: (await q(`select id from categories where user_id = $1 and name = 'Moradia e contas da casa'`, u))[0].id } });
     expect(r.status).toBe("created");
     expect(r.lancamento.pendente).toBe(true);
     expect(await saldo(u)).toBe(antes);

@@ -112,7 +112,7 @@ describe("conversa completa", () => {
     expect(r2.reply).toContain("Lazer");
     const [{ name }] = await q(`select c.name from transactions t join categories c on c.id=t.category_id
       where t.user_id=$1 and t.deleted_at is null order by t.created_at desc limit 1`, user);
-    expect(name).toBe("Lazer");
+    expect(name).toBe("Lazer e entretenimento");
   });
 
   test("apague o último lançamento (com confirmação)", async () => {
@@ -129,7 +129,7 @@ describe("conversa completa", () => {
     expect(r1.reply).toContain("Qual foi o valor");
     const r2 = await say("187,40");
     expect(r2.reply).toContain("R$ 187,40");
-    expect(r2.reply).toContain("Energia");
+    expect(r2.reply).toContain("Luz");
   });
 
   test("falta categoria -> pergunta -> registra", async () => {

@@ -231,7 +231,13 @@ export async function transcribeAudio(bytes: Uint8Array, mime: string, cfg: AiCo
 // ---------------------------------------------------------------------------
 export interface StatementItem { data: string; descricao: string; valor: number; parcela?: string; categoria?: string; }
 export interface Statement {
-  tipo: "fatura_cartao" | "extrato_conta";
+  tipo: "fatura_cartao" | "extrato_conta" | "cupom_fiscal";
+  /** cupom/nota fiscal: loja, data da compra, forma de pagamento e categoria sugerida */
+  estabelecimento?: string;
+  data?: string;
+  forma_pagamento?: "credito" | "debito" | "pix" | "dinheiro";
+  categoria?: string;
+  subcategoria?: string;
   banco?: string;
   cartao?: string;
   final_cartao?: string;
@@ -253,9 +259,11 @@ export function isEncryptedPdf(bytes: Uint8Array): boolean {
 
 function statementPrompt(ctx: UserContext): string {
   const cats = ctx.categorias.filter((c) => c.tipo === "despesa").map((c) => `${c.nome}${c.subcategorias.length ? ` (${c.subcategorias.join(", ")})` : ""}`).join("; ");
-  return `Você lê faturas de cartão de crédito e extratos bancários brasileiros. Hoje é ${ctx.hoje}.
+  return `Você lê faturas de cartão de crédito, extratos bancários e cupons/notas fiscais de compra brasileiros. Hoje é ${ctx.hoje}.
 Responda SOMENTE com JSON neste formato:
-{"tipo":"fatura_cartao"|"extrato_conta","banco":"nome do banco/emissor","cartao":"nome do cartão se aparecer","final_cartao":"4 últimos dígitos se aparecerem",
+{"tipo":"fatura_cartao"|"extrato_conta"|"cupom_fiscal",
+ "estabelecimento":"nome da loja (cupom)","data":"AAAA-MM-DD da compra (cupom)","forma_pagamento":"credito"|"debito"|"pix"|"dinheiro"|null (cupom),
+ "categoria":"categoria da compra (cupom)","subcategoria":"subcategoria se souber (cupom)","banco":"nome do banco/emissor","cartao":"nome do cartão se aparecer","final_cartao":"4 últimos dígitos se aparecerem",
  "vencimento":"AAAA-MM-DD (fatura)","fechamento":"AAAA-MM-DD se aparecer","total":número (total da fatura ou null),
  "itens":[{"data":"AAAA-MM-DD","descricao":"texto do lançamento como está","valor":número,"parcela":"3/10 se for parcela","categoria":"uma das categorias abaixo"}]}
 Regras:
@@ -263,8 +271,9 @@ Regras:
 - Em FATURA: compras, parcelas, tarifas, juros e IOF com valor POSITIVO; pagamentos, estornos e créditos com valor NEGATIVO. Não inclua linhas de resumo, subtotais, "total da fatura anterior", limites ou parcelamentos futuros.
 - Em EXTRATO de conta: saídas NEGATIVAS e entradas POSITIVAS. Ignore linhas de saldo.
 - Datas sem ano: use o ano coerente com o vencimento/período do documento.
+- CUPOM ou NOTA FISCAL de uma compra (NFC-e, cupom de supermercado, nota de loja, recibo): tipo "cupom_fiscal"; "total" = valor TOTAL PAGO (depois de descontos); "itens" = produtos com descricao e valor (data = data da compra); use o nome fantasia da loja em "estabelecimento"; forma_pagamento conforme o cupom (cartão de crédito -> "credito", débito -> "debito").
 - valor em reais como número (1.234,56 -> 1234.56).
-- categoria: escolha a mais provável entre: ${cats}. Se não souber, use "Outros".`;
+- categoria: escolha a mais provável entre: ${cats}. Se não souber, use "Outros gastos" (despesa) ou "Outras receitas" (receita).`;
 }
 
 export async function extractStatement(bytes: Uint8Array, mime: string, ctx: UserContext, cfg: AiConfig): Promise<Statement> {
@@ -285,7 +294,7 @@ export async function extractStatement(bytes: Uint8Array, mime: string, ctx: Use
   try { raw = JSON.parse(textOf(r.data)); } catch { throw new StatementError("ilegivel", "Não consegui ler o documento."); }
   const st = sanitizeStatement(raw, ctx);
   st.model = r.model;
-  if (!st.itens.length) throw new StatementError("ilegivel", "Não encontrei lançamentos no documento.");
+  if (!st.itens.length && !(st.tipo === "cupom_fiscal" && (st.total ?? 0) > 0)) throw new StatementError("ilegivel", "Não encontrei lançamentos no documento.");
   return st;
 }
 
@@ -294,7 +303,12 @@ export function sanitizeStatement(raw: any, ctx: UserContext): Statement {
   const isDate = (s: unknown) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
   const cats = new Map(ctx.categorias.filter((c) => c.tipo === "despesa").map((c) => [norm(c.nome), c.nome]));
   const st: Statement = {
-    tipo: raw?.tipo === "extrato_conta" ? "extrato_conta" : "fatura_cartao",
+    tipo: raw?.tipo === "extrato_conta" ? "extrato_conta" : raw?.tipo === "cupom_fiscal" ? "cupom_fiscal" : "fatura_cartao",
+    estabelecimento: typeof raw?.estabelecimento === "string" ? raw.estabelecimento.replace(/\s+/g, " ").trim().slice(0, 60) || undefined : undefined,
+    data: isDate(raw?.data) ? raw.data : undefined,
+    forma_pagamento: ["credito", "debito", "pix", "dinheiro"].includes(raw?.forma_pagamento) ? raw.forma_pagamento : undefined,
+    categoria: cats.get(norm(String(raw?.categoria ?? ""))),
+    subcategoria: typeof raw?.subcategoria === "string" ? raw.subcategoria.slice(0, 40) : undefined,
     banco: typeof raw?.banco === "string" ? raw.banco.slice(0, 40) : undefined,
     cartao: typeof raw?.cartao === "string" ? raw.cartao.slice(0, 40) : undefined,
     final_cartao: typeof raw?.final_cartao === "string" ? raw.final_cartao.replace(/\D/g, "").slice(-4) || undefined : undefined,
@@ -305,7 +319,9 @@ export function sanitizeStatement(raw: any, ctx: UserContext): Statement {
   };
   for (const it of Array.isArray(raw?.itens) ? raw.itens.slice(0, 1500) : []) {
     const v = Number(it?.valor);
-    if (!isDate(it?.data) || !Number.isFinite(v) || v === 0 || Math.abs(v) > 1e8) continue;
+    if (!isDate(it?.data) && !(st.tipo === "cupom_fiscal" && st.data)) continue;
+    if (!Number.isFinite(v) || v === 0 || Math.abs(v) > 1e8) continue;
+    if (!isDate(it?.data)) it.data = st.data;
     const parcela = typeof it?.parcela === "string" && /^\d{1,2}\/\d{1,2}$/.test(it.parcela.trim()) ? it.parcela.trim() : undefined;
     st.itens.push({
       data: it.data, valor: Math.round(v * 100) / 100, parcela,

@@ -41,8 +41,8 @@ export async function mercadoView(page, C) {
       <p class="small muted" style="margin-top:-6px">Compare quanto um valor renderia com as taxas de hoje. Os resultados aparecem na ordem que você marcou — o app não indica qual escolher.</p>
       <form id="simF" class="sim-form" novalidate>
         <div class="row">
-          <div class="field"><label>Valor inicial (R$)</label><input class="input num" name="inicial" inputmode="decimal" value="10.000,00"></div>
-          <div class="field"><label>Aporte mensal (R$)</label><input class="input num" name="mensal" inputmode="decimal" placeholder="0,00"></div>
+          <div class="field"><label>Valor inicial (R$)</label><input class="input num" name="inicial" inputmode="decimal" value="R$ 10.000,00"></div>
+          <div class="field"><label>Aporte mensal (R$)</label><input class="input num" name="mensal" inputmode="decimal" placeholder="R$ 0,00"></div>
           <div class="field"><label>Prazo (meses)</label><input class="input num" name="meses" type="number" min="1" max="600" value="12">
             <div class="chips-sm">${[[6, "6 meses"], [12, "1 ano"], [24, "2 anos"], [60, "5 anos"]].map(([m, l]) => `<button type="button" data-m="${m}">${l}</button>`).join("")}</div></div>
         </div>
@@ -70,7 +70,7 @@ function prodRow(k, on, param, suf) {
   const p = PRODUTOS[k];
   return `<label class="prod"><input type="checkbox" name="p_${k}" ${on ? "checked" : ""}>
     <span class="prod-name">${p.nome}${p.isento ? ' <span class="tag ok">isento de IR</span>' : ""}</span>
-    ${param ? `<span class="prod-param"><input class="input num" name="v_${k}" inputmode="decimal" value="${String(p[param]).replace(".", ",")}"><span class="small muted">${suf}</span></span>` : ""}</label>`;
+    ${param ? `<span class="prod-param"><input class="input num" name="v_${k}" inputmode="decimal" data-pct value="${String(p[param]).replace(".", ",")}"><span class="small muted">${suf}</span></span>` : ""}</label>`;
 }
 
 async function load(page, C, force) {

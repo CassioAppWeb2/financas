@@ -76,7 +76,7 @@ A conexão pelo WhatsApp ainda está sendo preparada. Por enquanto use o própri
    • Vários de uma vez: “gastei 20 na padaria e 50 de gasolina”.
    • Parcelado: “comprei uma TV de 2.400 em 10x no Nubank”.
    • Outra data: “ontem”, “dia 5”, “sexta”.
-2. *Botão +* (no Início ou em Lançamentos): escolha Despesa, Receita, Conta a pagar, A receber ou Transferência e preencha.
+2. *Botão +* (no Início ou em Lançamentos): escolha Despesa, Receita, Conta a pagar, A receber ou Transferência e preencha. Os valores já aparecem em reais enquanto você digita, e as *parcelas* são escolhidas numa lista (mostra o valor de cada uma).
 3. *Importando* extrato ou fatura (pergunte “como importo a fatura?”).
 Eu escolho a categoria sozinho e vou aprendendo com as suas correções.`,
   },
@@ -154,7 +154,8 @@ Eu leio as compras, sugiro as categorias e mostro uma *prévia*: confira, ajuste
 • Pelo chat: “crie a conta Itaú com saldo de 2.300”.
 • O saldo é calculado pelos lançamentos. Se não bater com o banco, ajuste o saldo inicial ou confira lançamentos faltando.
 • Transferência entre contas: “transferi 500 do Nubank para a poupança” ou *+ → Transferência*.
-• Conta que não usa mais: abra a conta → *Arquivar* (o histórico continua).`,
+• *Ajustar o saldo*: abra a conta → *Ajustar saldo* → informe o saldo que aparece no banco. A diferença entra como “Ajuste de saldo” (não conta como receita nem despesa).
+• Conta que não usa mais: abra a conta → *Arquivar* (o histórico continua) ou *Excluir* (se tiver lançamentos, eu pergunto se apago junto).`,
   },
   {
     id: "categorias", titulo: "Categorias e subcategorias",
@@ -169,7 +170,7 @@ Eu leio as compras, sugiro as categorias e mostro uma *prévia*: confira, ajuste
     chaves: { meta: 3, metas: 3, juntar: 3, guardar: 2, objetivo: 2, viagem: 1, "reserva": 2 },
     texto: `🎯 *Metas*
 • Pelo chat: “quero juntar 20 mil até dezembro para a viagem”, “guardei 500 na meta viagem”, “como estão minhas metas?”.
-• No app: menu *Metas → Nova meta*. Em cada meta use *+ Guardar* e *− Retirar*; *Histórico* mostra os movimentos.
+• No app: menu *Metas e planejamento*. Lá tem a sua média mensal (renda, gastos, sobra) e três grupos: *Reserva de emergência* (você escolhe quantos meses de gastos quer cobrir e eu calculo o valor), *Metas de poupança* e *Investimentos*. Em cada uma, informe quanto pretende guardar por mês para ver a previsão. Use *+ Guardar* e *− Retirar*; *Histórico* mostra os movimentos.
 • Eu aviso quando estiver perto da meta ou se o ritmo não for suficiente para o prazo.`,
   },
   {
@@ -248,6 +249,27 @@ Se o problema continuar, anote o que aconteceu e o horário e avise quem adminis
 • No modo família, os membros veem os valores da família; o filtro mostra o de cada um.
 • Os áudios ficam guardados só por 7 dias.
 • O app não acessa sua conta no banco e não pede senha de banco — nunca informe senhas de banco aqui.`,
+  },
+  {
+    id: "preferencias", titulo: "Tema claro/escuro, ordem dos lançamentos e Face ID",
+    chaves: { tema: 4, escuro: 4, claro: 3, "modo noturno": 4, ordem: 3, crescente: 4, decrescente: 4, "face id": 5, digital: 3, biometria: 4, bloqueio: 4, bloquear: 4, senha: 1 },
+    texto: `⚙️ *Preferências* (em *Configurações → Aparência e segurança*)
+• *Tema*: Automático (segue o celular), Claro ou Escuro.
+• *Ordem dos lançamentos*: mais recentes primeiro ou mais antigos primeiro.
+• *Bloqueio com Face ID / digital*: toque em *Ativar bloqueio* e confirme com o rosto ou a digital. Ao abrir o app (ou voltar depois de 2 minutos), ele pede a biometria. Vale só para aquele celular. No iPhone funciona no app instalado pelo Safari; no Android, pelo Chrome. Se a biometria falhar, dá para entrar com e-mail e senha.`,
+  },
+  {
+    id: "zerar", titulo: "Zerar a conta (recomeçar do zero)",
+    chaves: { zerar: 5, reiniciar: 4, "apagar tudo": 5, "comecar do zero": 5, recomecar: 4, resetar: 4, limpar: 3 },
+    texto: `🧹 *Zerar a conta* (só o titular da família)
+*Configurações → Conta → Zerar a conta…* Apaga todos os lançamentos e zera os saldos iniciais. Você escolhe se também apaga contas fixas, orçamentos, metas e cartões/contas. Para confirmar, digite *ZERAR*. Não dá para desfazer.`,
+  },
+  {
+    id: "cupom", titulo: "Foto de cupom ou nota fiscal",
+    chaves: { cupom: 5, "nota fiscal": 5, nota: 2, recibo: 3, "bater foto": 4, "tirar foto": 4, foto: 2, camera: 3, nfce: 4 },
+    texto: `🧾 *Foto do cupom ou nota fiscal*
+Na aba *Assistente*, toque no botão da *câmera* (ao lado do microfone), tire a foto do cupom (ou escolha da galeria). Eu leio a loja, a data, o total e a forma de pagamento e lanço a despesa na categoria certa. Se foi no cartão de crédito e você tem mais de um, eu pergunto qual. No Telegram, é só mandar a foto.
+Dica: foto reta, com boa luz e o cupom inteiro aparecendo.`,
   },
   {
     id: "mercado", titulo: "Mercado: indicadores e simulador de investimentos",

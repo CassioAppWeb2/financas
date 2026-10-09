@@ -82,7 +82,7 @@ describe("lançamentos e consultas família x individual", () => {
   });
 
   test("lançamento pelo formulário para a família", async () => {
-    const cat = (await asUser<any>(ana, "app_bootstrap")).categorias.find((c: any) => c.nome === "Moradia");
+    const cat = (await asUser<any>(ana, "app_bootstrap")).categorias.find((c: any) => c.nome === "Moradia e contas da casa");
     const r = await asUser<any>(ana, "app_save_transaction", { tipo: "despesa", valor: 50, categoria_id: cat.id, membro: "familia" });
     expect(r.lancamento.membro).toBe("Família");
     const lista = await asUser<any>(cassio, "app_transactions", { membro_id: "familia" });

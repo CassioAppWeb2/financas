@@ -11,6 +11,27 @@ import { guessCategory } from "./categorizer.ts";
 const wb = (s: string) => new RegExp(`(^|[^a-z0-9])${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`);
 
 /** Procura nomes de categorias/subcategorias do próprio usuário na frase. */
+/** Nomes antigos/curtos das categorias padrão (a pessoa ainda pode falar assim). */
+const CAT_ALIASES: Record<string, string[]> = {
+  "moradia e contas da casa": ["moradia", "casa", "contas da casa", "contas de casa"],
+  "lazer e entretenimento": ["lazer", "diversao"],
+  "dividas e emprestimos": ["financeiro", "dividas", "divida", "emprestimo"],
+  "impostos e taxas": ["impostos", "imposto", "taxas"],
+  "assinaturas e servicos": ["assinaturas", "assinatura"],
+  "compras pessoais e casa": ["compras"],
+  "filhos e familia": ["filhos", "crianca", "criancas"],
+  "cuidados pessoais": ["beleza", "cuidados"],
+  "outros gastos": ["outros", "outras despesas", "diversos"],
+  "outras receitas": ["outros", "outras"],
+  "salario e remuneracao": ["salario", "remuneracao"],
+  "renda extra": ["freelance", "freela", "bico", "bicos"],
+  "negocios e vendas": ["vendas", "negocio", "negocios", "pro-labore", "pro labore", "prolabore"],
+  "investimentos": ["rendimentos", "rendimento"],
+  "alugueis recebidos": ["aluguel recebido", "alugueis"],
+  "aposentadoria e pensao": ["aposentadoria", "pensao"],
+  "reembolsos": ["reembolso"],
+};
+
 export function matchUserCategory(text: string, ctx: UserContext, tipo?: "despesa" | "receita"):
   { categoria: string; subcategoria?: string } | null {
   const n = norm(text);
@@ -18,7 +39,9 @@ export function matchUserCategory(text: string, ctx: UserContext, tipo?: "despes
   for (const c of ctx.categorias) {
     if (tipo && c.tipo !== tipo) continue;
     const cn = norm(c.nome);
-    if (cn !== "outros" && wb(cn).test(n) && (!best || cn.length > best.len)) best = { categoria: c.nome, len: cn.length };
+    // nomes compostos também valem por partes ("Lazer e entretenimento" -> "lazer"), e nomes antigos ("financeiro")
+    const keys = [cn, ...cn.split(/ e /).filter((x) => x.length >= 4 && x !== cn), ...(CAT_ALIASES[cn] ?? [])];
+    for (const k of keys) if (k !== "outros" && wb(k).test(n) && (!best || k.length > best.len)) best = { categoria: c.nome, len: k.length };
     for (const s of c.subcategorias) {
       const sn = norm(s);
       if (wb(sn).test(n) && (!best || sn.length > best.len)) best = { categoria: c.nome, subcategoria: s, len: sn.length };
@@ -152,7 +175,7 @@ export function extractObject(text: string): string | undefined {
     const ext = /^\s+de\s+([a-zà-ú]+)/.exec(after);
     if (norm(obj) === "conta" && ext) obj = `${obj}${ext[0]}`;
     if (norm(obj) === "conta" || GENERIC.has(norm(obj))) continue;
-    if (/^(salario|meu salario)$/.test(norm(obj))) return "Salário";
+    if (/^(salario|meu salario)$/.test(norm(obj))) return "Salário e remuneração";
     const orig = text.slice(start, start + obj.length);
     return orig === orig.toLowerCase() ? capitalize(orig) : orig;
   }

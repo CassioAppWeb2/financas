@@ -93,10 +93,19 @@ export function createAppHandler(deps: AppDeps) {
         return json({ error: `Não consegui transcrever o áudio (${(e as Error).message}).` }, 422);
       }
     }
+    // Foto de cupom/nota fiscal (ou PDF de fatura) enviada pelo chat do app
+    let document: IncomingMessage["document"];
+    if (typeof body?.foto_base64 === "string") {
+      if (body.foto_base64.length > 21_000_000) return json({ error: "Foto grande demais (máximo 15 MB)." }, 400);
+      const mime = String(body.mime ?? "image/jpeg");
+      if (!/^(application\/pdf|image\/(jpeg|png|webp|heic|heif))$/.test(mime)) return json({ error: "Envie uma foto (JPG/PNG) ou PDF." }, 400);
+      document = { bytes: Uint8Array.from(atob(body.foto_base64), (ch) => ch.charCodeAt(0)), mime, name: mime === "application/pdf" ? "documento.pdf" : "foto.jpg" };
+      if (!content.trim()) content = mime === "application/pdf" ? "📄 Documento" : "📷 Foto de cupom/nota";
+    }
     if (!content.trim()) return json({ error: "Mensagem vazia" }, 400);
 
-    const msg: IncomingMessage = { user_id: userId, channel: "app", type, content, timestamp: new Date().toISOString(), audio_provider, audio_path };
-    const reply = await handleMessage(msg, { db: deps.db, ai: deps.ai, marketFetch: deps.marketFetch });
+    const msg: IncomingMessage = { user_id: userId, channel: "app", type, content, timestamp: new Date().toISOString(), audio_provider, audio_path, document };
+    const reply = await handleMessage(msg, { db: deps.db, ai: deps.ai, marketFetch: deps.marketFetch, extract: deps.extract });
     return json(type === "audio" ? { ...reply, transcricao: content, audio_path } : reply);
   };
 }

@@ -580,3 +580,31 @@ svg.rot90 { transform: rotate(90deg); }
 .sim-liq { font-size: 19px; font-weight: 600; }
 .premissas { margin: 12px 0 0; padding-left: 18px; line-height: 1.5; }
 @media (max-width: 559px) { .mk-grid { grid-template-columns: 1fr 1fr; gap: 10px; } .mk-val { font-size: 18px; } .mk-foot span.muted { display: none; } .sim-r { align-items: flex-start; text-align: left; } }
+
+/* bloqueio, zona de risco, preferências */
+.lock { position: fixed; inset: 0; z-index: 100; background: var(--side-bg); display: grid; place-items: center; padding: 24px; }
+.lock-box { text-align: center; color: #fff; display: flex; flex-direction: column; align-items: center; gap: 12px; max-width: 320px; }
+.lock-box h1 { margin: 6px 0 0; font-size: 22px; font-weight: 600; }
+.lock-box .muted { color: var(--side-ink); margin: 0 0 8px; }
+.lock-box .btn.primary { background: var(--logo-line); border-color: var(--logo-line); color: #1d1a12; min-width: 200px; justify-content: center; }
+.lock-box .btn.ghost { color: var(--side-ink); }
+.lock-box .expense { color: #ffb4a3; min-height: 1em; }
+.danger-zone { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.danger-zone h3 { font-size: 14px; margin: 0 0 4px; font-weight: 600; color: var(--danger); }
+.btn.danger.primary { background: var(--danger); border-color: var(--danger); color: #fff; }
+#prefsCard .seg { flex-wrap: wrap; }
+.acc-saldo { display: flex; justify-content: space-between; align-items: center; gap: 10px; background: var(--surface-2); border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; }
+.acc-saldo > div { display: flex; flex-direction: column; }
+.acc-saldo b { font-size: 18px; font-weight: 600; }
+
+/* metas e planejamento */
+.plan-sum { margin-bottom: 18px; }
+.plan-nums { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 10px; }
+.plan-nums > div { display: flex; flex-direction: column; gap: 2px; }
+.plan-nums b { font-size: 18px; font-weight: 600; }
+@media (max-width: 559px) { .plan-nums { grid-template-columns: 1fr 1fr; } }
+.plan-sec { margin-top: 20px; }
+.plan-sec-h { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.plan-sec-h h2 { font-size: 17px; margin: 0; font-weight: 600; }
+.plan-empty { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.plan-empty p { margin: 0; flex: 1; min-width: 200px; }

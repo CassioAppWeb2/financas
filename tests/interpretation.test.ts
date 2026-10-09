@@ -95,7 +95,7 @@ describe("outras frases do documento", () => {
     ["entrou 3 mil da empresa", { intent: "CREATE_INCOME", valor: 3000 }],
     ["ontem comprei uma roupa de 150 reais", { valor: 150, data: "2026-10-05", subcategoria: "Roupas", descricao: "Roupa" }],
     ["recebi 500 reais daquele cliente", { intent: "CREATE_INCOME", valor: 500 }],
-    ["paguei minha conta de luz", { intent: "CREATE_EXPENSE", subcategoria: "Energia", descricao: "Conta de luz" }],
+    ["paguei minha conta de luz", { intent: "CREATE_EXPENSE", subcategoria: "Luz", descricao: "Conta de luz" }],
     ["Gastei 100 no Posto ABC.", { valor: 100, estabelecimento: "Posto ABC" }],
     ["Minha internet custa R$ 120 todo mês.", { intent: "CREATE_RECURRING", valor: 120, subcategoria: "Internet" }],
     ["Recebo R$ 7.000 de salário todo quinto dia útil.", { intent: "CREATE_RECURRING", tipo: "receita", valor: 7000 }],

@@ -21,7 +21,10 @@ const userOf = (req: Request) => tokens.get((req.headers.get("authorization") ??
 
 // FAKE_EXTRACT=1: simula a leitura de PDF (sem IA) para testar a tela de importação
 const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
-const fakeExtract = process.env.FAKE_EXTRACT ? async () => ({
+const fakeCupom = { tipo: "cupom_fiscal" as const, estabelecimento: "Supermercado Bom Preço", data: today, forma_pagamento: "debito" as const, total: 134.7,
+  categoria: "Alimentação", subcategoria: "Supermercado",
+  itens: [{ data: today, descricao: "ARROZ 5KG", valor: 32.9 }, { data: today, descricao: "CAFE 500G", valor: 21.8 }, { data: today, descricao: "CARNE MOIDA", valor: 80 }] };
+const fakeExtract = process.env.FAKE_EXTRACT ? async (_b: Uint8Array, mime: string) => mime.startsWith("image/") ? fakeCupom : ({
   tipo: "fatura_cartao" as const, banco: "Nubank", cartao: "Nubank", total: 205.9,
   itens: [
     { data: today, descricao: "UBER *TRIP", valor: 25.9 },

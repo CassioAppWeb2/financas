@@ -4,6 +4,10 @@ import { brl, incomeExpenseChart, lineChart, categoryBars } from "./charts.js";
 import * as F2 from "./fase2.js";
 import { icon, logo } from "./icons.js";
 import { mercadoView } from "./mercado.js";
+import { pref, setPref, applyTheme, biometricAvailable, lockEnabled, enableLock, disableLock, setupLock } from "./prefs.js";
+applyTheme();
+matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", applyTheme);
+let lockReady = false;
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -51,7 +55,18 @@ function parseMoney(s) {
   else if (/^\d{1,3}(\.\d{3})+$/.test(v)) v = v.replace(/\./g, "");
   return Number(v);
 }
-const moneyInput = (cents) => (cents == null ? "" : (Number(cents) / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+/** Valor em formato moeda para os campos: "R$ 1.234,56". */
+const fmtMoney = (cents) => `${cents < 0 ? "-" : ""}R$ ${(Math.abs(cents) / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const moneyInput = (cents) => (cents == null || cents === "" ? "" : fmtMoney(Number(cents)));
+// Todos os campos de valor (inputmode="decimal") viram moeda enquanto a pessoa digita: 1 → R$ 0,01 · 1234 → R$ 12,34
+// (campos de percentual têm data-pct e ficam livres). Roda antes dos outros "input" para todos já lerem o valor formatado.
+document.addEventListener("input", (e) => {
+  const el = e.target;
+  if (!(el instanceof HTMLInputElement) || el.inputMode !== "decimal" || "pct" in el.dataset) return;
+  const neg = "neg" in el.dataset && /[-−]/.test(el.value);
+  const digits = el.value.replace(/\D/g, "").replace(/^0+/, "").slice(0, 13);
+  el.value = digits ? fmtMoney((neg ? -1 : 1) * Number(digits)) : neg ? "-" : "";
+}, true);
 
 /** Markdown leve das respostas do assistente, sempre escapado antes. */
 function md(text) {
@@ -131,6 +146,8 @@ function shell(route) {
 async function router(opts) {
   if (!api.configured()) return setupView();
   if (!api.getSession()) return authView();
+  document.querySelectorAll(".modal-back").forEach((m) => m.remove());   // trocar de tela fecha janelas abertas
+  if (!lockReady) { lockReady = true; setupLock({ logo: logo(56), onPassword: async () => { await api.signOut(); state.boot = null; location.hash = "#/"; router(); } }); }
   const silent = opts?.silent === true && $("#page");
   const route = location.hash.replace(/^#\/?/, "");
   viewRefresh = null;
@@ -306,13 +323,13 @@ async function dashboard(page) {
 }
 
 function txItem(t) {
-  const sign = t.tipo === "receita" || t.tipo === "resgate" ? "+" : t.tipo === "transferencia" ? "" : "−";
+  const sign = t.tipo === "ajuste" ? (t.valor_cents >= 0 ? "+" : "−") : t.tipo === "receita" || t.tipo === "resgate" ? "+" : t.tipo === "transferencia" ? "" : "−";
   const cls = t.tipo === "receita" || t.tipo === "resgate" ? "income" : t.tipo === "despesa" ? "expense" : "";
   const onde = t.cartao ? `💳 ${esc(t.cartao)}` : esc(t.conta);
   const sub = t.tipo === "transferencia" ? `${esc(t.conta)} → ${esc(t.conta_destino)}` :
     t.tipo === "pagamento_fatura" ? `${esc(t.conta)} → fatura ${esc(t.cartao)} · ${dateBR(t.data)}` :
     [family() && esc(memberLabel(t)), t.categoria && `${esc(t.categoria)}${t.subcategoria ? " › " + esc(t.subcategoria) : ""}`, onde, dateBR(t.data)].filter(Boolean).join(" · ");
-  const icon = t.tipo === "transferencia" ? "🔁" : t.tipo === "investimento" ? "📈" : t.tipo === "resgate" ? "📥" : t.tipo === "pagamento_fatura" ? "💳" : t.icone || "•";
+  const icon = t.tipo === "ajuste" ? "⚖️" : t.tipo === "transferencia" ? "🔁" : t.tipo === "investimento" ? "📈" : t.tipo === "resgate" ? "📥" : t.tipo === "pagamento_fatura" ? "💳" : t.icone || "•";
   const prev = (t.pendente ? ` <span class="tag ${t.data < todayISO() ? "bad" : "warn"}">${t.data < todayISO() ? "atrasado" : t.tipo === "receita" ? "a receber" : "a pagar"}</span>`
       : t.data > todayISO() ? ' <span class="tag">previsto</span>' : "") +
     (t.acerto === "pendente" ? ` <span class="tag warn">a acertar${t.deve_para ? " c/ " + esc(t.deve_para.split(" ")[0]) : ""}</span>` : t.divisao_id ? ' <span class="tag">dividido</span>' : "");
@@ -325,6 +342,13 @@ function bindTxClicks(host, list, after) {
     const it = e.target.closest("[data-id]");
     if (!it) return;
     const t = list.find((x) => x.id === it.dataset.id);
+    if (t?.tipo === "ajuste") {
+      confirmBox(`Excluir este ajuste de saldo (${brl(t.valor_cents)})?`, "Excluir", true).then(async (ok) => {
+        if (!ok) return;
+        try { await api.rpc("app_delete_transaction", { id: t.id }); toast("Ajuste excluído"); state.boot = null; after?.(); } catch (e) { toast(e.message); }
+      });
+      return;
+    }
     if (t) txForm(t, after);
   };
 }
@@ -351,7 +375,7 @@ function txForm(t, after, preset = {}) {
       <div class="field desc-field"><label>Descrição</label><input class="input" name="descricao" maxlength="120" autocomplete="off" value="${esc((t?.descricao || "").replace(/ \(\d+\/\d+\)$/, ""))}" placeholder="Ex.: Mercado, aluguel, salário…">
         <div class="sugs hidden" id="sugs" role="listbox" aria-label="Lançamentos anteriores parecidos"></div></div>
       <div class="row">
-        <div class="field"><label>Valor (R$)</label><input class="input num" name="valor" inputmode="decimal" placeholder="0,00" value="${moneyInput(t?.valor_cents)}" ${edit && t.parcelas > 1 ? "disabled" : ""}></div>
+        <div class="field"><label>Valor (R$)</label><input class="input num" name="valor" inputmode="decimal" placeholder="R$ 0,00" value="${moneyInput(t?.valor_cents)}" ${edit && t.parcelas > 1 ? "disabled" : ""}></div>
         <div class="field"><label class="lbl-data">Data</label><input class="input" type="date" name="data" value="${t?.data || todayISO()}" ${edit && t.parcelas > 1 ? "disabled" : ""}></div>
       </div>
       <div class="row cat-row">
@@ -361,7 +385,7 @@ function txForm(t, after, preset = {}) {
       <div class="row">
         <div class="field"><label class="lbl-conta">Conta</label><select class="input" name="conta_id" ${edit && t.cartao_id ? "disabled" : ""}>${opts([...contas.map((a) => [a.id, a.nome]), ...(edit && !t.cartao_id ? [] : (b.cartoes || []).map((k) => ["k:" + k.id, "💳 " + k.nome]))], t?.cartao_id ? "k:" + t.cartao_id : t?.conta_id || defaultAccount(contas)?.id)}</select></div>
         <div class="field dest-row"><label>Conta de destino</label><select class="input" name="conta_destino_id" ${edit ? "disabled" : ""}>${opts(contas.map((a) => [a.id, a.nome]), t?.conta_destino_id || contas.find((a) => !a.padrao)?.id)}</select></div>
-        ${edit ? "" : `<div class="field parc-row"><label>Parcelas</label><input class="input num" name="parcelas" type="number" min="1" max="72" value="1"></div>`}
+        ${edit ? "" : `<div class="field parc-row"><label>Parcelas</label><select class="input" name="parcelas">${Array.from({ length: 48 }, (_, i) => `<option value="${i + 1}">${i ? `${i + 1}x` : "À vista (1x)"}</option>`).join("")}</select></div>`}
       </div>
       <div class="row sit-row">
         <div class="field"><label>Situação</label><div class="seg sit" role="radiogroup"><button type="button" data-v="0"></button><button type="button" data-v="1"></button></div></div>
@@ -427,6 +451,13 @@ function txForm(t, after, preset = {}) {
     const isSplit = () => split && f.membro.value === "dividir" && f.tipo.value === "despesa";
     const toggleSplit = () => { if (!split) return; $(".split-host", m).classList.toggle("hidden", !isSplit()); if (isSplit()) split.fill(parseMoney(f.valor.value)); syncSit(); };
     syncSit();
+    // parcelas: mostra o valor de cada uma na lista (rolagem)
+    const syncParc = () => {
+      if (!f.parcelas) return;
+      const v = parseMoney(f.valor.value);
+      [...f.parcelas.options].forEach((o, i) => { o.textContent = i ? `${i + 1}x${v > 0 ? ` de ${brl(Math.round((v * 100) / (i + 1)))}` : ""}` : `À vista (1x)${v > 0 ? ` — ${brl(Math.round(v * 100))}` : ""}`; });
+    };
+    f.valor.addEventListener("input", syncParc); syncParc();
     // histórico: enquanto digita a descrição, mostra os últimos lançamentos parecidos para copiar
     const sugs = $("#sugs", m);
     let sugList = [], sugTimer = null, sugSeq = 0;
@@ -569,6 +600,7 @@ async function transactions(page) {
     const desp = data.filter((t) => t.tipo === "despesa").reduce((s, t) => s + t.valor_cents, 0);
     $("#summary").innerHTML = `${data.length} lançamentos · Receitas <b class="income num">${brl(rec)}</b> · Despesas <b class="expense num">${brl(desp)}</b>`;
     if (!data.length) { $("#txList").innerHTML = `<div class="empty"><div class="big">${icon("list", 34)}</div>Nenhum lançamento em ${monthTitle(state.month)}.</div>`; return; }
+    if (pref("ordem", "desc") === "asc") data = [...data].reverse();
     let html = "", day = "";
     for (const t of data) {
       if (t.data !== day) { day = t.data; html += `<div class="day-label">${new Date(day + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</div>`; }
@@ -633,6 +665,8 @@ async function chat(page) {
     <div class="messages" id="msgs" aria-live="polite"></div>
     <div class="chips" id="chips">${SUGGESTIONS.map((s) => `<button>${esc(s)}</button>`).join("")}</div>
     <form class="composer" id="composer">
+      <button type="button" class="round mic" id="cam" aria-label="Foto de cupom ou nota fiscal" title="Foto de cupom ou nota fiscal">${icon("camera", 21)}</button>
+      <input type="file" id="camFile" accept="image/*,application/pdf" hidden>
       <button type="button" class="round mic" id="mic" aria-label="Gravar áudio" title="Gravar áudio">${icon("mic", 21)}</button>
       <textarea class="input" id="txt" rows="1" placeholder="${state.boot.perfil?.assistente ? `Fale com ${esc(state.boot.perfil.assistente)}…` : "Escreva ou fale…"}" maxlength="2000"></textarea>
       <button class="round send" id="sendBtn" aria-label="Enviar">${icon("send", 20)}</button>
@@ -652,7 +686,7 @@ async function chat(page) {
 
   let busy = false;
   async function send(text, type = "text", extra = {}) {
-    if (busy || (!text.trim() && !extra.audio_base64)) return;
+    if (busy || (!text.trim() && !extra.audio_base64 && !extra.foto_base64)) return;
     busy = true; chatSending = true;
     const pid = extra.label ? "p" + Date.now() : undefined;
     if (text.trim() || extra.label) box.insertAdjacentHTML("beforeend", bubble({ role: "user", content: text.trim() || extra.label, channel: "app", message_type: type, created_at: new Date().toISOString(), pid }));
@@ -664,6 +698,7 @@ async function chat(page) {
       $("#typing")?.remove();
       // áudio: troca o "transcrevendo…" pelo que foi entendido, com o botão para ouvir
       if (pid && r.transcricao) $("#" + pid)?.replaceWith(htmlEl(bubble({ role: "user", content: r.transcricao, channel: "app", message_type: "audio", audio_path: r.audio_path, created_at: new Date().toISOString() })));
+      if (pid && type === "foto") { const tx = $("#" + pid + " .txt"); if (tx) tx.textContent = tx.textContent.replace(" — lendo…", ""); }
       box.insertAdjacentHTML("beforeend", bubble({ role: "assistant", content: r.reply, cards: r.cards, created_at: new Date().toISOString() }));
       const novoNome = /meu nome é \*([^*]+)\*/.exec(r.reply)?.[1] ?? (/voltei a ser só o \*Assistente\*/.test(r.reply) ? "" : null);
       if (novoNome !== null) {
@@ -696,6 +731,33 @@ async function chat(page) {
     } catch (x) { b.disabled = false; b.innerHTML = `${icon("play", 14)} Ouvir áudio`; toast(x.message.includes("not_found") || x.message.includes("404") ? "Este áudio não está mais disponível (guardamos por 7 dias)." : x.message); }
   });
   setupMic(send);
+  // Foto de cupom/nota fiscal: o assistente lê e lança a compra
+  $("#cam").onclick = () => $("#camFile").click();
+  $("#camFile").onchange = async (e) => {
+    const file = e.target.files?.[0]; e.target.value = "";
+    if (!file) return;
+    try {
+      const { b64, mime } = await shrinkImage(file);
+      send("", "foto", { foto_base64: b64, mime, label: `📷 ${mime === "application/pdf" ? "Documento" : "Foto do cupom"} — lendo…` });
+    } catch (x) { toast(x.message || "Não consegui abrir a foto."); }
+  };
+}
+
+/** Reduz a foto (máx. 1800 px, JPEG) antes de enviar — fica rápido mesmo no 4G. PDFs vão como estão. */
+async function shrinkImage(file) {
+  const toB64 = (blob) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = rej; r.readAsDataURL(blob); });
+  if (file.type === "application/pdf") { if (file.size > 15e6) throw new Error("Arquivo grande demais (máximo 15 MB)."); return { b64: await toB64(file), mime: "application/pdf" }; }
+  try {
+    const bmp = await createImageBitmap(file);
+    const k = Math.min(1, 1800 / Math.max(bmp.width, bmp.height));
+    const cv = document.createElement("canvas"); cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
+    cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);
+    const blob = await new Promise((res) => cv.toBlob(res, "image/jpeg", 0.85));
+    return { b64: await toB64(blob), mime: "image/jpeg" };
+  } catch {
+    if (file.size > 15e6) throw new Error("Foto grande demais.");
+    return { b64: await toB64(file), mime: file.type || "image/jpeg" };
+  }
 }
 
 /**
@@ -708,7 +770,7 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) relea
 window.addEventListener("hashchange", () => { if (!location.hash.startsWith("#/assistente")) releaseMic(); });
 function setupMic(send) {
   const btn = $("#mic"), bar = $("#recbar"), timeEl = $("#recTime");
-  const hideWhileRec = [$("#mic"), $("#txt"), $("#sendBtn")];
+  const hideWhileRec = [$("#mic"), $("#cam"), $("#txt"), $("#sendBtn")].filter(Boolean);
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
     btn.onclick = () => toast("Este navegador não permite gravar áudio. Atualize o navegador ou use o Telegram.");
     return;
@@ -770,7 +832,7 @@ function setupMic(send) {
 // ---------------------------------------------------------------- CONTAS
 async function accounts(page) {
   const b = await loadBoot(true);
-  const list = b.contas.contas;
+  const list = b.contas.contas.filter((a) => a.status !== "excluida");
   page.innerHTML = `
     <div class="page-head"><h1>Contas</h1><div class="row"><button class="btn" id="impAcc">${icon("upload", 17)} Importar extrato</button><button class="btn primary" id="newAcc">${icon("plus", 17)} Nova conta</button></div></div>
     <div class="card kpi" style="margin-bottom:14px"><div class="label">Saldo total (contas ativas)</div><div class="value num">${brl(b.contas.total_cents)}</div><div class="hint">Calculado pelos lançamentos até hoje</div></div>
@@ -787,27 +849,43 @@ async function accounts(page) {
   $("#accList").onclick = (e) => { const it = e.target.closest("[data-id]"); if (it) accForm(list.find((a) => a.id === it.dataset.id), reload); };
 }
 
+const BANCOS = ["Banrisul", "Banco do Brasil", "Bradesco", "Caixa", "Itaú", "Santander", "Nubank", "Inter", "C6 Bank", "Sicredi", "Sicoob", "BTG Pactual", "XP", "PicPay", "Mercado Pago", "PagBank", "Banco Original", "Neon", "Next", "Safra", "BRB", "Banco do Nordeste", "Banestes", "Banpará", "Unicred", "Cresol", "Agibank", "Will Bank", "Rico", "Nu Invest"];
 function accForm(a, after) {
   modal(`<h2>${a ? "Editar conta" : "Nova conta"}</h2>
     <form id="af" novalidate>
       <div class="field"><label>Nome</label><input class="input" name="nome" maxlength="60" value="${esc(a?.nome || "")}" placeholder="Ex.: Nubank"></div>
       <div class="row">
         <div class="field"><label>Tipo</label><select class="input" name="tipo">${Object.entries(ACC_TYPES).map(([v, l]) => `<option value="${v}" ${v === (a?.tipo || "corrente") ? "selected" : ""}>${l}</option>`).join("")}</select></div>
-        <div class="field"><label>Instituição</label><input class="input" name="instituicao" value="${esc(a?.instituicao || "")}" placeholder="Ex.: Nu Pagamentos"></div>
+        <div class="field"><label>Banco</label><input class="input" name="instituicao" list="bancosList" value="${esc(a?.instituicao || "")}" placeholder="Ex.: Banrisul" autocomplete="off">
+          <datalist id="bancosList">${BANCOS.map((x) => `<option value="${x}">`).join("")}</datalist></div>
       </div>
-      <div class="field"><label>Saldo inicial (R$)</label><input class="input num" name="saldo" inputmode="decimal" placeholder="0,00" value="${a ? "" : ""}">
-        <span class="small muted">${a ? "Deixe em branco para manter o saldo inicial atual." : "Quanto havia na conta antes de começar a usar o app."}</span></div>
+      ${a ? `<div class="acc-saldo"><div><span class="small muted">Saldo hoje no app</span><b class="num">${brl(a.saldo_cents)}</b></div>
+          ${a.status === "ativa" ? `<button type="button" class="btn small" id="adjBtn">${icon("edit", 15)} Ajustar saldo</button>` : ""}</div>`
+        : `<div class="field"><label>Saldo atual no banco (R$)</label><input class="input num" name="saldo" inputmode="decimal" data-money data-neg placeholder="R$ 0,00">
+        <span class="small muted">Quanto há na conta hoje, antes de começar a lançar no app.</span></div>`}
       ${family() ? `<div class="field"><label>De quem é a conta?</label><select class="input" name="membro">
         ${state.boot.familia.membros.map((m) => `<option value="${m.id}" ${(a ? a.membro_id === m.id : m.eu) ? "selected" : ""}>${m.eu ? "Minha" : "De " + esc(m.nome)}</option>`).join("")}
         <option value="familia" ${a && a.membro_id === null ? "selected" : ""}>Da família (conjunta)</option></select>
         <span class="small muted">No Início, ao escolher uma pessoa, o saldo mostra só as contas dela.</span></div>` : ""}
       <label class="row small" style="margin-bottom:12px"><input type="checkbox" name="padrao" ${a?.padrao ? "checked" : ""}> Usar como conta padrão</label>
       <p class="small expense hidden" id="aErr"></p>
-      <div class="modal-actions">${a ? `<button type="button" class="btn" id="arch">${a.status === "ativa" ? "Arquivar" : "Reativar"}</button><span class="spacer"></span>` : ""}
+      <div class="modal-actions">${a ? `<button type="button" class="btn danger" id="accDel">${icon("trash", 16)} Excluir</button><button type="button" class="btn" id="arch">${a.status === "ativa" ? "Arquivar" : "Reativar"}</button><span class="spacer"></span>` : ""}
         <button type="button" class="btn" id="aCancel">Cancelar</button><button class="btn primary">Salvar</button></div>
     </form>`, (m, close) => {
     const f = $("#af", m);
     $("#aCancel", m).onclick = close;
+    if (a) $("#accDel", m).onclick = async () => {
+      try {
+        if (!(await confirmBox(`Excluir a conta “${a.nome}”?`, "Excluir", true))) return;
+        let r = await api.rpc("app_delete_account", { id: a.id });
+        if (r.status === "has_transactions") {
+          if (!(await confirmBox(`A conta “${a.nome}” tem ${r.quantidade} lançamento(s). Excluir a conta E esses lançamentos? (Se quiser manter o histórico, use Arquivar.)`, "Excluir tudo", true))) return;
+          r = await api.rpc("app_delete_account", { id: a.id, apagar_lancamentos: true });
+        }
+        close(); toast("Conta excluída"); state.boot = null; after();
+      } catch (e) { toast(e.message); }
+    };
+    if (a && $("#adjBtn", m)) $("#adjBtn", m).onclick = () => { close(); adjustDialog(a, after); };
     if (a) $("#arch", m).onclick = async () => {
       try { await api.rpc("app_archive_account", { id: a.id }); close(); state.boot = null; after(); } catch (e) { toast(e.message); }
     };
@@ -815,13 +893,63 @@ function accForm(a, after) {
       e.preventDefault();
       const p = { id: a?.id, nome: f.nome.value.trim(), tipo: f.tipo.value, instituicao: f.instituicao.value.trim(), padrao: f.padrao.checked };
       if (f.membro) p.membro = f.membro.value;
-      if (f.saldo.value.trim()) {
-        const v = parseMoney(f.saldo.value.replace(/^-/, ""));
+      if (f.saldo && f.saldo.value.trim()) {
+        const neg = /^\s*-|−/.test(f.saldo.value);
+        const v = parseMoney(f.saldo.value.replace(/[-−]/g, ""));
         if (Number.isNaN(v)) { $("#aErr", m).textContent = "Saldo inválido."; $("#aErr", m).classList.remove("hidden"); return; }
-        p.saldo_inicial = f.saldo.value.trim().startsWith("-") ? -v : v;
+        p.saldo_inicial = neg ? -v : v;
       }
       try { await api.rpc("app_save_account", p); close(); toast("Conta salva ✅"); state.boot = null; after(); }
       catch (ex) { $("#aErr", m).textContent = ex.message; $("#aErr", m).classList.remove("hidden"); }
+    };
+  });
+}
+
+function resetDialog(after) {
+  modal(`<h2>Zerar a conta</h2>
+    <form id="rf" novalidate>
+      <p class="small">Todos os <b>lançamentos</b> (gastos, receitas, transferências, faturas e acertos) serão apagados${family() ? " para toda a família" : ""}. Os saldos iniciais das contas voltam a zero.</p>
+      <p class="small muted">Também apagar:</p>
+      <label class="row small"><input type="checkbox" name="fixas" checked> Contas fixas</label>
+      <label class="row small"><input type="checkbox" name="orcamentos" checked> Orçamentos</label>
+      <label class="row small"><input type="checkbox" name="metas"> Metas (se desmarcado, as metas ficam com valor guardado zerado)</label>
+      <label class="row small" style="margin-bottom:12px"><input type="checkbox" name="cadastros"> Cartões e contas (fica só a conta padrão)</label>
+      <div class="field"><label>Para confirmar, digite ZERAR</label><input class="input" name="conf" autocomplete="off" placeholder="ZERAR"></div>
+      <p class="small expense hidden" id="rErr"></p>
+      <div class="modal-actions"><button type="button" class="btn" id="rCancel">Cancelar</button><button class="btn danger primary">Zerar tudo</button></div>
+    </form>`, (m, close) => {
+    const f = $("#rf", m);
+    $("#rCancel", m).onclick = close;
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        const r = await api.rpc("app_reset_account", { confirmacao: f.conf.value, fixas: f.fixas.checked, orcamentos: f.orcamentos.checked, metas: f.metas.checked, cadastros: f.cadastros.checked });
+        close(); toast(`Conta zerada: ${r.lancamentos} lançamentos apagados.`); after();
+      } catch (ex) { $("#rErr", m).textContent = ex.message; $("#rErr", m).classList.remove("hidden"); }
+    };
+  });
+}
+
+/** Ajustar saldo: a pessoa informa o saldo real do banco e o app lança a diferença como "Ajuste de saldo". */
+function adjustDialog(a, after) {
+  modal(`<h2>Ajustar saldo — ${esc(a.nome)}</h2>
+    <form id="adj" novalidate>
+      <p class="small muted">Saldo hoje no app: <b class="num">${brl(a.saldo_cents)}</b>. Informe o saldo que aparece no banco; a diferença entra como “Ajuste de saldo” (não conta como receita nem despesa).</p>
+      <div class="field"><label>Saldo correto hoje (R$)</label><input class="input num" name="saldo" inputmode="decimal" data-money data-neg value="${moneyInput(a.saldo_cents)}"></div>
+      <p class="small" id="adjDiff"></p><p class="small expense hidden" id="adjErr"></p>
+      <div class="modal-actions"><button type="button" class="btn" id="adjC">Cancelar</button><button class="btn primary">Ajustar</button></div>
+    </form>`, (m, close) => {
+    const f = $("#adj", m);
+    const val = () => { const neg = /^\s*-|−/.test(f.saldo.value); const v = parseMoney(f.saldo.value.replace(/[-−]/g, "")); return Number.isNaN(v) ? NaN : Math.round((neg ? -v : v) * 100); };
+    const show = () => { const v = val(); $("#adjDiff", m).innerHTML = Number.isNaN(v) ? "" : v === a.saldo_cents ? "Sem diferença." : `Diferença: <b class="num ${v > a.saldo_cents ? "income" : "expense"}">${v > a.saldo_cents ? "+" : "−"} ${brl(Math.abs(v - a.saldo_cents))}</b>`; };
+    f.saldo.addEventListener("input", show); show();
+    $("#adjC", m).onclick = close;
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const v = val();
+      if (Number.isNaN(v)) { $("#adjErr", m).textContent = "Saldo inválido."; $("#adjErr", m).classList.remove("hidden"); return; }
+      try { const r = await api.rpc("app_adjust_balance", { conta_id: a.id, saldo_cents: v }); close(); toast(r.status === "sem_diferenca" ? "O saldo já estava certo 👍" : "Saldo ajustado ✅"); state.boot = null; after(); }
+      catch (ex) { $("#adjErr", m).textContent = ex.message; $("#adjErr", m).classList.remove("hidden"); }
     };
   });
 }
@@ -900,7 +1028,7 @@ async function settings(page) {
         <div class="field"><label>Seu nome</label><input class="input" name="nome" value="${esc(b.perfil?.nome || "")}"></div>
         <div class="field"><label>Nome do assistente</label><input class="input" name="assistente" maxlength="30" placeholder="Ex.: Jarbas" value="${esc(b.perfil?.assistente || "")}">
           <span class="small muted">Dê um nome ao seu assistente e chame por ele: “Jarbas, gastei 50 no mercado”. Também dá para pedir no chat: “seu nome agora é Jarbas”.</span></div>
-        <div class="field"><label>Meta de economia ${family() ? "da família " : ""}por mês (R$)</label><input class="input num" name="meta" inputmode="decimal" placeholder="Ex.: 1.500,00" value="${moneyInput(b.perfil?.meta_economia_cents)}">
+        <div class="field"><label>Meta de economia ${family() ? "da família " : ""}por mês (R$)</label><input class="input num" name="meta" inputmode="decimal" placeholder="Ex.: R$ 1.500,00" value="${moneyInput(b.perfil?.meta_economia_cents)}">
           <span class="small muted">Usada no cálculo de “quanto posso gastar”. Deixe vazio se não tiver meta.</span></div>
         <button class="btn primary">Salvar</button></form>
 
@@ -934,8 +1062,28 @@ async function settings(page) {
       <div class="card"><h2>📱 Instalar no celular</h2>
         <p class="small muted">No Android (Chrome): menu ⋮ → <b>Instalar app</b>. No iPhone (Safari): botão Compartilhar → <b>Adicionar à Tela de Início</b>.</p>
         <button class="btn ${installPrompt ? "" : "hidden"}" id="inst">Instalar agora</button></div>
-      <div class="card"><h2>Conta</h2><p class="small muted">${esc(api.getSession()?.user?.email || "")}</p><button class="btn" id="out">Sair</button></div>
+      <div class="card" id="prefsCard"><h2>Aparência e segurança</h2>
+        <div class="field"><label>Tema</label><div class="seg" id="tema">${[["auto", "Automático"], ["claro", "Claro"], ["escuro", "Escuro"]].map(([v, l]) => `<button type="button" data-v="${v}" class="${pref("tema", "auto") === v ? "on" : ""}">${l}</button>`).join("")}</div>
+          <span class="small muted">Automático segue o modo claro/escuro do celular.</span></div>
+        <div class="field"><label>Ordem dos lançamentos</label><div class="seg" id="ordem">${[["desc", "Mais recentes primeiro"], ["asc", "Mais antigos primeiro"]].map(([v, l]) => `<button type="button" data-v="${v}" class="${pref("ordem", "desc") === v ? "on" : ""}">${l}</button>`).join("")}</div></div>
+        <div class="field"><label>Bloqueio com Face ID / digital</label>
+          <div class="row"><button type="button" class="btn ${lockEnabled() ? "" : "primary"}" id="lockBtn">${lockEnabled() ? "Desativar bloqueio" : "Ativar bloqueio"}</button><span class="small muted" id="lockMsg">${lockEnabled() ? "Ativado neste aparelho." : ""}</span></div>
+          <span class="small muted">Ao abrir o app (ou voltar depois de 2 minutos), ele pede o Face ID ou a digital do aparelho. Vale só para este celular.</span></div>
+      </div>
+      <div class="card"><h2>Conta</h2><p class="small muted">${esc(api.getSession()?.user?.email || "")}</p><button class="btn" id="out">Sair</button>
+        ${fam.titular ? `<div class="danger-zone"><h3>Zerar a conta</h3><p class="small muted">Apaga todos os lançamentos para recomeçar do zero${family() ? " (vale para toda a família)" : ""}. Não dá para desfazer.</p>
+          <button class="btn danger" id="resetBtn">Zerar a conta…</button></div>` : ""}</div>
     </div>`;
+  const segPick = (id, fn) => { $(id).onclick = (e) => { const b2 = e.target.closest("[data-v]"); if (!b2) return; $$(id + " button").forEach((x) => x.classList.toggle("on", x === b2)); fn(b2.dataset.v); }; };
+  segPick("#tema", (v) => { setPref("tema", v === "auto" ? null : v); applyTheme(); });
+  segPick("#ordem", (v) => { setPref("ordem", v === "desc" ? null : v); toast("Ordem salva ✅"); });
+  $("#lockBtn").onclick = async () => {
+    if (lockEnabled()) { disableLock(); toast("Bloqueio desativado"); return settings(page); }
+    if (!(await biometricAvailable())) { $("#lockMsg").textContent = "Este aparelho/navegador não oferece Face ID ou digital para sites. No iPhone, use o app instalado pelo Safari; no Android, pelo Chrome."; return; }
+    try { await enableLock(api.getSession()?.user?.email, b.perfil?.nome); toast("Bloqueio ativado 🔒"); settings(page); }
+    catch (e) { $("#lockMsg").textContent = e?.name === "NotAllowedError" ? "Cancelado." : "Não foi possível ativar neste aparelho."; }
+  };
+  if ($("#resetBtn")) $("#resetBtn").onclick = () => resetDialog(() => { state.boot = null; location.hash = "#/"; });
 
   $("#pf").onsubmit = async (e) => {
     e.preventDefault();

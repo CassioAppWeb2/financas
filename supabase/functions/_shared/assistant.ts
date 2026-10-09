@@ -511,7 +511,7 @@ async function createdReply(r: any, i: Interpretation, c: Ctx): Promise<Outcome>
       ? `\n🚨 ${o.categoria} passou do orçamento do mês: ${brl(o.gasto_cents)} de ${brl(o.limite_cents)} (${Math.round(o.percentual)}%).`
       : `\n⚠️ ${o.categoria} já usou ${Math.round(o.percentual)}% do orçamento (${brl(o.gasto_cents)} de ${brl(o.limite_cents)}).`;
   }
-  if ((i.categoria_confianca ?? 1) < 0.8 && t.categoria === "Outros") reply += `\nSe preferir outra categoria, é só dizer: “muda a categoria para …”.`;
+  if ((i.categoria_confianca ?? 1) < 0.8 && /^Outr/.test(t.categoria ?? "")) reply += `\nSe preferir outra categoria, é só dizer: “muda a categoria para …”.`;
   if (t.tipo === "receita") {
     const a = await c.deps.db.rpc<any>("fe_available", c.user, {});
     reply += `\n\nConsiderando os lançamentos cadastrados, a previsão de saldo livre até o fim do mês é de **${brl(a.disponivel_cents)}** (estimativa).`;
@@ -1109,6 +1109,7 @@ async function documentFlow(c: Ctx): Promise<Outcome> {
     console.error("fatura:", (e as Error).message);
     return { reply: "Não consegui ler esse documento. 😕 Confira se é a fatura ou o extrato (PDF ou foto nítida) e tente de novo. Se preferir, baixe o arquivo *OFX* ou *CSV* no app do banco e importe em *Cartões → Importar fatura*.", pending: null };
   }
+  if (st.tipo === "cupom_fiscal") return receiptFlow(st, c);
   if (st.tipo === "fatura_cartao") {
     const cards = c.uc.cartoes ?? [];
     if (!cards.length) {
@@ -1130,6 +1131,25 @@ async function documentFlow(c: Ctx): Promise<Outcome> {
       pending: { kind: "import_dest", st, options: contas, campo: "conta" } };
   }
   return importPreview(st, { conta }, c);
+}
+
+/** Foto de cupom/nota fiscal: lança a compra (valor total) — se faltar algo (cartão, categoria), pergunta. */
+async function receiptFlow(st: Statement, c: Ctx): Promise<Outcome> {
+  const total = st.total && st.total > 0 ? st.total : st.itens.reduce((s, x) => s + (x.valor > 0 ? x.valor : 0), 0);
+  if (!(total > 0)) return { reply: "🧾 Li o cupom, mas não encontrei o valor total. Pode me dizer quanto foi? Ex.: “gastei 87,50 no mercado”.", pending: null };
+  const loja = st.estabelecimento || "Compra";
+  const guess = guessCategory(`${loja} ${st.itens.map((x) => x.descricao).join(" ")}`, "despesa");
+  const interp: Interpretation = {
+    intent: "CREATE_EXPENSE", tipo: "despesa", valor: Math.round(total * 100) / 100, confidence: 0.95,
+    descricao: loja, estabelecimento: st.estabelecimento,
+    data: st.data && st.data <= c.uc.hoje ? st.data : undefined, data_explicita: Boolean(st.data),
+    categoria: st.categoria ?? guess?.categoria, subcategoria: st.categoria ? st.subcategoria : guess?.subcategoria,
+    categoria_confianca: st.categoria || guess ? 0.9 : undefined,
+    forma_pagamento: st.forma_pagamento,
+  } as Interpretation;
+  const resumo = `🧾 Li o cupom de *${loja}*${st.data ? ` (${dateBR(st.data)})` : ""}: ${st.itens.length ? `${st.itens.length} ${st.itens.length === 1 ? "item" : "itens"}, ` : ""}total *${brl(Math.round(total * 100))}*${st.forma_pagamento ? ` · ${({ credito: "cartão de crédito", debito: "débito", pix: "Pix", dinheiro: "dinheiro" } as Record<string, string>)[st.forma_pagamento]}` : ""}.`;
+  const out = await createFlow(interp, c);
+  return { ...out, reply: `${resumo}\n${out.reply}${out.pending ? "" : "\nSe algo estiver diferente, é só dizer (ex.: “muda a categoria para …”, “o valor certo é …”)."}` };
 }
 
 async function importPreview(st: Statement, dest: ImportDest, c: Ctx): Promise<Outcome> {
