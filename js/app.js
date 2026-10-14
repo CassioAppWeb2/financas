@@ -4,6 +4,7 @@ import { brl, incomeExpenseChart, lineChart, categoryBars } from "./charts.js";
 import * as F2 from "./fase2.js";
 import { icon, logo } from "./icons.js";
 import { mercadoView } from "./mercado.js";
+import { initAvisos, refreshAvisos, settingsCard, bindSettings } from "./avisos.js";
 import { pref, setPref, applyTheme, biometricAvailable, lockEnabled, enableLock, disableLock, setupLock } from "./prefs.js";
 applyTheme();
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", applyTheme);
@@ -149,13 +150,15 @@ async function router(opts) {
   document.querySelectorAll(".modal-back").forEach((m) => m.remove());   // trocar de tela fecha janelas abertas
   if (!lockReady) { lockReady = true; setupLock({ logo: logo(56), onPassword: async () => { await api.signOut(); state.boot = null; location.hash = "#/"; router(); } }); }
   const silent = opts?.silent === true && $("#page");
-  const route = location.hash.replace(/^#\/?/, "");
+  const route = location.hash.replace(/^#\/?/, "").split("?")[0];
   viewRefresh = null;
+  document.body.classList.toggle("rota-chat", route.startsWith("assistente"));
   const page = silent ? $("#page") : shell(route);
   const y = window.scrollY, py = page.scrollTop;
   if (!silent) page.innerHTML = `<div class="empty">Carregando…</div>`;
   try {
     await loadBoot();
+    if (!silent) refreshAvisos();
     if (route === "") await dashboard(page);
     else if (route.startsWith("assistente")) await chat(page);
     else if (route.startsWith("lancamentos")) await transactions(page);
@@ -1062,6 +1065,7 @@ async function settings(page) {
       <div class="card"><h2>📱 Instalar no celular</h2>
         <p class="small muted">No Android (Chrome): menu ⋮ → <b>Instalar app</b>. No iPhone (Safari): botão Compartilhar → <b>Adicionar à Tela de Início</b>.</p>
         <button class="btn ${installPrompt ? "" : "hidden"}" id="inst">Instalar agora</button></div>
+      ${settingsCard(b)}
       <div class="card" id="prefsCard"><h2>Aparência e segurança</h2>
         <div class="field"><label>Tema</label><div class="seg" id="tema">${[["auto", "Automático"], ["claro", "Claro"], ["escuro", "Escuro"]].map(([v, l]) => `<button type="button" data-v="${v}" class="${pref("tema", "auto") === v ? "on" : ""}">${l}</button>`).join("")}</div>
           <span class="small muted">Automático segue o modo claro/escuro do celular.</span></div>
@@ -1083,6 +1087,7 @@ async function settings(page) {
     try { await enableLock(api.getSession()?.user?.email, b.perfil?.nome); toast("Bloqueio ativado 🔒"); settings(page); }
     catch (e) { $("#lockMsg").textContent = e?.name === "NotAllowedError" ? "Cancelado." : "Não foi possível ativar neste aparelho."; }
   };
+  bindSettings();
   if ($("#resetBtn")) $("#resetBtn").onclick = () => resetDialog(() => { state.boot = null; location.hash = "#/"; });
 
   $("#pf").onsubmit = async (e) => {
@@ -1151,7 +1156,8 @@ function more(page) {
 // ---------------------------------------------------------------- início
 F2.init({ api, state, loadBoot, modal, toast, confirmBox, esc, brl, dateBR, parseMoney, moneyInput, monthTitle, shiftMonth, monthNav, txItem, bindTxClicks,
   family, memberSeg, memberLabel, todayISO, MESES, TIPOS, txForm, setRefresh: (fn) => { viewRefresh = fn; } });
-api.onAuth((s) => { if (!s) { state.boot = null; } });
+initAvisos({ api, state, toast, esc, dateBR, parseMoney, modal, confirmBox, reload: () => (viewRefresh ? viewRefresh() : router({ silent: true })) });
+api.onAuth((s) => { if (!s) { state.boot = null; document.getElementById("bellBtn")?.classList.add("hidden"); } });
 window.addEventListener("hashchange", router);
 router();
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
