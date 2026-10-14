@@ -194,7 +194,8 @@ export async function recurringView(page) {
   const r = await C.api.rpc("app_recurrings");
   const item = (x) => `<div class="item click" data-id="${x.id}"><div class="emoji">${x.icone || (x.tipo === "receita" ? "💰" : "🔄")}</div>
     <div class="body"><div class="title">${C.esc(x.descricao)}</div>
-    <div class="sub">${C.esc(x.quando)} · ${C.esc(x.categoria || "")}${x.cartao ? ` · 💳 ${C.esc(x.cartao)}` : x.conta ? ` · ${C.esc(x.conta)}` : ""}${x.proxima ? ` · próx. ${C.dateBR(x.proxima)}` : ""}${x.fim ? ` · até ${C.dateBR(x.fim)}` : ""}</div></div>
+    <div class="sub">${C.esc(x.quando)}${x.fim ? ` · até ${C.monthTitle(x.fim.slice(0, 7)).toLowerCase()}` : " · sem fim"}${x.renovar ? ` <span class="tag warn">renovar</span>` : ""} · ${C.esc(x.categoria || "")}${x.cartao ? ` · 💳 ${C.esc(x.cartao)}` : x.conta ? ` · ${C.esc(x.conta)}` : ""}${x.proxima ? ` · próx. ${C.dateBR(x.proxima)}` : ""}</div>
+    ${x.renovar ? `<button class="btn small primary" style="margin-top:6px" data-renew="${x.id}">Renovar</button>` : ""}</div>
     <div class="amount num ${x.tipo === "receita" ? "income" : "expense"}">${C.brl(x.valor_cents)}</div></div>`;
   const rec = r.itens.filter((x) => x.tipo === "receita"), desp = r.itens.filter((x) => x.tipo === "despesa");
   page.innerHTML = `
@@ -208,11 +209,44 @@ export async function recurringView(page) {
       ${desp.length ? `<h2 ${rec.length ? 'style="margin-top:16px"' : ""}>🔄 Despesas</h2><div class="list">${desp.map(item).join("")}</div>` : ""}
       ${!r.itens.length ? `<div class="empty"><div class="big">${icon("repeat", 34)}</div><p><b>Nenhuma conta fixa.</b></p><p class="muted">Aluguel, internet, assinaturas, salário… Cadastre aqui ou diga ao assistente: “minha internet custa 120 todo dia 10”.</p></div>` : ""}
     </div>
-    <p class="small muted" style="margin-top:12px">Os lançamentos são criados sozinhos até o fim do mês seguinte e aparecem como <b>previstos</b> até a data chegar.</p>`;
+    <p class="small muted" style="margin-top:12px">Cada conta fixa fica programada pelo período escolhido (normalmente 12 meses) e os lançamentos aparecem como <b>previstos</b> até a data chegar — assim dá para ver os meses à frente. No último mês eu aviso para você renovar, com ou sem reajuste.</p>`;
   const reload = () => recurringView(page);
   $("#newRec").onclick = () => recForm(null, reload);
-  $("#recList").onclick = (e) => { const it = e.target.closest("[data-id]"); if (it) recForm(r.itens.find((x) => x.id === it.dataset.id), reload); };
+  $("#recList").onclick = (e) => {
+    const rb = e.target.closest("[data-renew]");
+    if (rb) { e.stopPropagation(); return renewBox(r.itens.find((x) => x.id === rb.dataset.renew), reload); }
+    const it = e.target.closest("[data-id]"); if (it) recForm(r.itens.find((x) => x.id === it.dataset.id), reload); };
   C.setRefresh(reload);
+}
+
+/** Renovar uma conta fixa que está terminando: mesmo valor, com reajuste ou encerrar. */
+export function renewBox(x, after) {
+  C.modal(`<h2>Renovar “${C.esc(x.descricao)}”</h2>
+    <p class="muted">${x.fim ? `Ela está programada até <b>${C.dateBR(x.fim)}</b>. ` : ""}Valor atual: <b>${C.brl(x.valor_cents)}</b>. Houve reajuste?</p>
+    <form id="rnf" novalidate>
+      <div class="row">
+        <div class="field"><label>Novo valor (deixe igual se não mudou)</label><input class="input num" name="valor" inputmode="decimal" value="${C.moneyInput(x.valor_cents)}"></div>
+        <div class="field"><label>Lançar por mais</label><select class="input" name="meses">${opts([["12", "12 meses"], ["6", "6 meses"], ["24", "24 meses"]], "12")}</select></div></div>
+      <p class="small expense hidden form-err"></p>
+      <div class="modal-actions"><button type="button" class="btn danger" id="rnEnd">Não renovar</button><span class="spacer"></span>
+        <button type="button" class="btn" id="rnC">Agora não</button><button class="btn primary">Renovar</button></div>
+    </form>`, (m, close) => {
+    const f = $("#rnf", m);
+    $("#rnC", m).onclick = close;
+    $("#rnEnd", m).onclick = async () => {
+      try { await C.api.rpc("app_renew_recurring", { id: x.id, encerrar: true }); close(); C.toast("Certo, ela termina na data programada."); after?.(); } catch (y) { err(m, y.message); }
+    };
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const v = C.parseMoney(f.valor.value);
+      if (!(v > 0)) return err(m, "Informe um valor válido.");
+      try {
+        const r = await C.api.rpc("app_renew_recurring", { id: x.id, valor: v, meses: Number(f.meses.value) });
+        close(); C.state.boot = null;
+        C.toast(`Renovada ✅ até ${C.dateBR(r.ate)}`); after?.();
+      } catch (y) { err(m, y.message); }
+    };
+  });
 }
 
 function recForm(x, after) {
@@ -236,7 +270,11 @@ function recForm(x, after) {
           <optgroup label="Dia útil">${opts(uteis.map(([v, l]) => ["u" + v, l]), x?.dia_util ? "u" + x.dia_util : null)}</optgroup></select></div></div>
       <div class="row">
         <div class="field"><label class="f-ini-l">Começa em</label><input class="input" type="date" name="inicio" value="${x?.inicio || ""}"></div>
-        <div class="field"><label>Termina em <span class="muted">opcional</span></label><input class="input" type="date" name="fim" value="${x?.fim || ""}"></div></div>
+        <div class="field"><label>Por quanto tempo</label><select class="input" name="periodo">${opts([
+          ...(x ? [["manter", x.fim ? `Manter (até ${C.dateBR(x.fim)})` : "Manter (sem fim)"]] : []),
+          ["12", "12 meses"], ["6", "6 meses"], ["24", "24 meses"], ["36", "36 meses"], ["data", "Até uma data…"], ["sem_fim", "Sem data para acabar"]], x ? "manter" : "12")}</select>
+          <input class="input hidden" type="date" name="fim" value="${x?.fim || ""}" style="margin-top:6px"></div></div>
+      <p class="small muted f-per-hint">Fica tudo programado no período, para você ver os meses à frente. No último mês eu aviso para conferir se houve reajuste e renovar.</p>
       <div class="field"><label class="f-onde-l">Pagar com</label><select class="input" name="onde"></select></div>
       ${C.family() ? `<div class="field"><label>De quem é?</label><select class="input" name="membro">${b.familia.membros.map((mm) => `<option value="${mm.id}" ${(x ? x.membro_id === mm.id : mm.eu) ? "selected" : ""}>${mm.eu ? "Meu" : "De " + C.esc(mm.nome)}</option>`).join("")}<option value="familia" ${x && x.membro_id === null ? "selected" : ""}>Família (compartilhado)</option></select></div>` : ""}
       ${x ? `<p class="small muted">Ao salvar, os lançamentos futuros já previstos são refeitos com os novos dados. Os que já aconteceram não mudam.</p>` : ""}
@@ -256,6 +294,7 @@ function recForm(x, after) {
     };
     $("#rTipo", m).onclick = (e) => { const bt = e.target.closest("button"); if (!bt) return; tipo = bt.dataset.v; $$("#rTipo button", m).forEach((z) => z.classList.toggle("on", z === bt)); sync(); };
     f.frequencia.onchange = sync;
+    f.periodo.onchange = () => f.fim.classList.toggle("hidden", f.periodo.value !== "data");
     sync();
     $("#rc", m).onclick = close;
     $("#rDel", m)?.addEventListener("click", async () => {
@@ -271,7 +310,11 @@ function recForm(x, after) {
       const freq = f.frequencia.value;
       if (freq !== "mensal" && !f.inicio.value) return err(m, "Informe a primeira data.");
       const p = { id: x?.id, tipo, descricao: f.descricao.value.trim(), valor: v, categoria_id: f.categoria_id.value, subcategoria_id: f.subcategoria_id.value || null,
-        frequencia: freq, inicio: f.inicio.value || null, fim: f.fim.value || null };
+        frequencia: freq, inicio: f.inicio.value || null };
+      const per = f.periodo.value;
+      if (per === "data") { if (!f.fim.value) return err(m, "Informe até quando."); p.fim = f.fim.value; }
+      else if (per === "sem_fim") p.sem_fim = true;
+      else if (per !== "manter") p.meses = Number(per);
       if (freq === "mensal") { const q = f.quando.value; if (q[0] === "u") p.dia_util = Number(q.slice(1)); else p.dia = Number(q.slice(1)); }
       const [kind, id] = f.onde.value.split(":");
       if (kind === "k") p.cartao_id = id; else p.conta_id = id;

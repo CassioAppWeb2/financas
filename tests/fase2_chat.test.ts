@@ -56,9 +56,12 @@ describe("cartões pela conversa", () => {
 
 describe("contas fixas", () => {
   test("cria, lista e encerra", async () => {
-    const r = await say("minha internet custa 120 todo dia 28");
+    const ask = await say("minha internet custa 120 todo dia 28");
+    expect(ask.reply).toContain("Por quanto tempo");
+    const r = await say("12 meses");
     expect(r.reply).toContain("Conta fixa criada");
     expect(r.reply).toContain("todo dia 28");
+    expect(r.reply).toContain("12 lançamentos");
     const l = await say("quais são minhas contas fixas?");
     expect(l.reply).toContain("R$ 120,00");
     const c = await say("não pago mais a internet");

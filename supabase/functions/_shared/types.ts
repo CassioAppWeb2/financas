@@ -56,6 +56,9 @@ export interface Interpretation {
   meta?: string;                  // nome da meta financeira
   prazo?: string;                 // AAAA-MM-DD (metas)
   frequencia?: "mensal" | "semanal" | "anual";
+  /** conta fixa: por quantos meses lançar, ou sem data para terminar */
+  meses?: number;
+  sem_fim?: boolean;
   dia?: number;                   // dia do mês (recorrência)
   dia_util?: number;              // n-ésimo dia útil (recorrência)
   pessoa_id?: string;             // acerto: a outra pessoa da família

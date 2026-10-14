@@ -5,6 +5,7 @@
 import { createAppHandler, createMarketHandler, createTelegramHandler, createWhatsAppHandler } from "../_shared/channels.ts";
 import { postgrestEngine, getUserIdFromToken } from "../_shared/engine.ts";
 import { supabaseAudioStore } from "../_shared/storage.ts";
+import { createNotifyHandler } from "../_shared/notifier.ts";
 import { SUPABASE_URL, SERVICE_KEY, ANON_KEY, aiConfig, waConfig, tgConfig } from "../_shared/config.ts";
 
 declare const Deno: { serve(h: (r: Request) => Response | Promise<Response>): void };
@@ -18,11 +19,13 @@ const app = createAppHandler({ db, ai: aiConfig, store, getUserId: (token) => ge
 const whatsapp = createWhatsAppHandler({ db, ai: aiConfig, store, wa: waConfig, waitUntil });
 const telegram = createTelegramHandler({ db, ai: aiConfig, store, tg: tgConfig, waitUntil });
 const mercado = createMarketHandler({ db });
+const notificar = createNotifyHandler({ db, tgToken: tgConfig.token });
 
 Deno.serve((req) => {
   const path = new URL(req.url).pathname.replace(/\/+$/, "");
   if (path.endsWith("/whatsapp")) return whatsapp(req);
   if (path.endsWith("/telegram")) return telegram(req);
   if (path.endsWith("/mercado")) return mercado(req);
+  if (path.endsWith("/notificar")) return notificar(req);
   return app(req);
 });

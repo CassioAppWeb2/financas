@@ -6,6 +6,7 @@ import { handleMessage, readStatement, type AssistantDeps } from "./assistant.ts
 import { transcribeAudio, StatementError, type AiConfig } from "./ai.ts";
 import type { AudioStore } from "./storage.ts";
 import { ensureMarket } from "./mercado.ts";
+import { ensureVapid } from "./webpush.ts";
 
 export const CORS = {
   "access-control-allow-origin": "*",
@@ -51,6 +52,12 @@ export function createAppHandler(deps: AppDeps) {
 
     let body: any;
     try { body = await req.json(); } catch { return json({ error: "JSON inválido" }, 400); }
+
+    // Notificações no aparelho: chave pública para o navegador se inscrever
+    if (body?.acao === "push_chave") {
+      try { return json({ chave: (await ensureVapid(deps.db)).publicKey }); }
+      catch (e) { return json({ error: `Não consegui preparar as notificações (${(e as Error).message}).` }, 500); }
+    }
 
     // Tela "Mercado": indicadores do Banco Central (busca de novo se estiverem velhos ou se pedirem)
     if (body?.acao === "mercado") {

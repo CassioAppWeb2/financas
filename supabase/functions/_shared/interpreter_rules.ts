@@ -537,7 +537,7 @@ export function interpretRules(input: string, ctx: UserContext): Interpretation 
     if (!res.descricao) {
       const lead = text.match(/^\s*([A-Za-zÀ-ú][A-Za-zÀ-ú ]{1,30}?)\s+(?:r\$\s*)?\d/i);
       if (lead && !RX.expense.test(norm(lead[1])) && !RX.income.test(norm(lead[1])) && !/^(minha|meu|o|a)$/i.test(lead[1].trim())) {
-        const w = lead[1].trim().replace(/^(minha|meu|a|o)\s+/i, "").replace(/\s+(custa|custou|de|por|e)$/i, "");
+        const w = lead[1].trim().replace(/^(minha|meu|a|o)\s+/i, "").replace(/\s+(custa|custou|de|por|e|é|eh|vale|fica|sai)$/i, "");
         if (w) res.descricao = capitalize(w);
       }
     }

@@ -608,3 +608,26 @@ svg.rot90 { transform: rotate(90deg); }
 .plan-sec-h h2 { font-size: 17px; margin: 0; font-weight: 600; }
 .plan-empty { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .plan-empty p { margin: 0; flex: 1; min-width: 200px; }
+
+/* ---------- avisos (sininho) ---------- */
+.bell { position: fixed; top: calc(14px + env(safe-area-inset-top)); right: 18px; z-index: 40; width: 42px; height: 42px; border-radius: 50%;
+  display: grid; place-items: center; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); cursor: pointer;
+  box-shadow: 0 2px 10px rgba(15, 47, 53, .08); }
+.bell:hover { color: var(--brand); }
+.bell:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.bell.has { color: var(--brand); }
+.bell-badge { position: absolute; top: -3px; right: -3px; min-width: 19px; height: 19px; padding: 0 5px; border-radius: 99px; background: var(--danger);
+  color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; border: 2px solid var(--surface); }
+.main > .page-head, #page > .page-head { padding-right: 54px; }
+.avisos { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow: auto; margin: 0 -4px; padding: 0 4px; }
+.aviso { display: flex; gap: 12px; padding: 12px 10px; border-radius: 12px; }
+.aviso .emoji { font-size: 20px; line-height: 1.2; }
+.aviso .body { flex: 1; min-width: 0; }
+.aviso .title { font-weight: 600; }
+.aviso .sub { color: var(--ink-2); font-size: 14px; margin-top: 2px; }
+.aviso.nova { background: var(--brand-soft); }
+.aviso.feita { opacity: .6; }
+.aviso-meta { color: var(--ink-3); font-size: 12px; margin-top: 4px; }
+.aviso-acoes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+@media print { .bell { display: none; } }
+.rota-chat .bell { display: none; }

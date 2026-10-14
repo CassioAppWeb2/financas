@@ -25,6 +25,8 @@ describe("reconhece dúvidas sobre o app", () => {
     ["onde vejo a fatura do cartão?", "cartoes"],
     ["como exporto para excel?", "relatorios"],
     ["como cadastro uma conta fixa?", "fixas"],
+    ["como ativo as notificações no celular?", "avisos"],
+    ["como renovo uma conta fixa que teve reajuste?", "fixas"],
     ["como apago um lançamento errado?", "editar"],
     ["o app não atualizou, continua igual", "atualizar"],
     ["deu erro sem conexão com o servidor", "problemas"],

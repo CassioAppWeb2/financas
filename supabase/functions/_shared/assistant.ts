@@ -50,6 +50,8 @@ type Pending = (
   | { kind: "agent"; history: GeminiContent[] }
   | { kind: "confirm_value"; interp: Interpretation }
   | { kind: "agent_confirm"; call: AgentCall; history: GeminiContent[] }
+  | { kind: "ask_period"; interp: Interpretation }
+  | { kind: "renew_recurring"; id: string; nome: string; valor_cents: number; aguardando_valor?: boolean }
   | { kind: "sim_info"; texto: string; falta: "prazo" | "conta"; modo: "saldo" | "simular"; conta?: string | null; saldo_cents?: number; options?: string[] }
 ) & { fila?: QueueItem[] };
 
@@ -61,6 +63,8 @@ interface Ctx {
   uc: UserContext;
   deps: AssistantDeps;
   interpretationId?: string;
+  /** a pergunta pendente foi abandonada (a pessoa mudou de assunto) */
+  dropPending?: boolean;
 }
 
 const SUB_ICON: Record<string, string> = {
@@ -91,6 +95,7 @@ export async function handleMessage(msg: IncomingMessage, deps: AssistantDeps): 
   try {
     if (msg.document) out = await documentFlow(c);
     if (!out && content) out = await namingFlow(c);
+    if (!out && content && !state.pending) out = await renewFlow(c);
     if (!out && content) out = await investFlow(c);
     if (!out && content && isAppQuestion(content) && !findAmounts(content).some((a) => a.role === "valor" && a.value > 0)) out = await appHelpFlow(c);
     if (!out && !content && voc.chamou) out = { reply: `Oi${uc.nome ? `, ${uc.nome}` : ""}! Estou aqui. 👋 Pode falar: um gasto, um recebimento ou uma pergunta sobre suas finanças.` };
@@ -122,7 +127,7 @@ export async function handleMessage(msg: IncomingMessage, deps: AssistantDeps): 
   }
 
   if (msg.type === "audio" && content) out.reply = `🎙️ Entendi seu áudio: “${content}”\n\n${out.reply}`;
-  if (out.pending !== undefined) await db.rpc("fe_chat_state", user, { pending: out.pending });
+  if (out.pending !== undefined || c.dropPending) await db.rpc("fe_chat_state", user, { pending: out.pending ?? null });
   await db.rpc("fe_chat_append", user, { role: "assistant", channel: msg.channel, content: out.reply, cards: out.cards ?? null });
   return { reply: out.reply, cards: out.cards, intent: out.intent };
 }
@@ -522,9 +527,21 @@ async function createdReply(r: any, i: Interpretation, c: Ctx): Promise<Outcome>
 async function recurringFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
   if (i.valor === undefined) return { reply: "Qual é o valor desse lançamento recorrente?", pending: { kind: "ask_value", interp: { ...i, intent: "CREATE_RECURRING" } } };
   const tipo = i.tipo === "receita" ? "receita" : "despesa";
+  // por quanto tempo lançar: se não disse, pergunta (sugere 12 meses)
+  if (i.meses === undefined && !i.sem_fim) Object.assign(i, periodFrom(c.msg.content));
+  if (i.meses === undefined && !i.sem_fim) {
+    const quando = i.frequencia === "semanal" ? " toda semana" : i.frequencia === "anual" ? " todo ano" : i.dia ? ` todo dia ${i.dia}` : i.dia_util ? ` todo ${i.dia_util}º dia útil` : " todo mês";
+    return {
+      reply: `Por quanto tempo devo lançar ${(i.descricao || i.subcategoria || i.categoria) ? `**${i.descricao || i.subcategoria || i.categoria}**` : "essa conta fixa"} (${brl(Math.round(i.valor * 100))}${quando})?\n` +
+        `Sugiro **12 meses**: você já vê os próximos meses programados e, no último, eu pergunto se houve reajuste e renovo.\n` +
+        `Responda: *12 meses*, *24 meses*, *até dezembro de 2027* ou *sem fim*.`,
+      pending: { kind: "ask_period", interp: { ...i, intent: "CREATE_RECURRING" } },
+    };
+  }
   const r = await c.deps.db.rpc<any>("fe_save_recurring", c.user, {
     tipo, valor: i.valor, descricao: i.descricao, categoria: i.categoria, subcategoria: i.subcategoria, conta: i.conta, cartao: i.cartao,
     frequencia: i.frequencia, dia: i.dia, dia_util: i.dia_util, familia: i.familia, origem: origin(c),
+    ...(i.sem_fim ? { sem_fim: true } : { meses: i.meses }),
   });
   const rec = { ...i, intent: "CREATE_RECURRING" as const };
   if (r.status === "needs_category") {
@@ -540,12 +557,30 @@ async function recurringFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
   const x = r.recorrencia;
   const onde = x.cartao ? ` no cartão ${x.cartao}` : x.conta ? ` (${x.conta})` : "";
   let reply = `🔄 Conta fixa criada: **${x.descricao}** — ${brl(x.valor_cents)} ${x.quando}${onde}, em ${x.categoria}${x.subcategoria ? ` > ${x.subcategoria}` : ""}.`;
-  reply += `\nVou lançar sozinho ${x.frequencia === "semanal" ? "toda semana" : x.frequencia === "anual" ? "todo ano" : "todo mês"}${x.proxima ? `; o próximo é em ${dateBR(r.primeira)}` : ""}. Para parar, é só dizer “não pago mais ${x.descricao.toLowerCase()}”.`;
+  if (x.fim) {
+    const n = Number(x.lancadas_futuras ?? 0);
+    reply += `\n📅 Já deixei programado de ${mesAno(r.primeira)} até ${mesAno(x.ultima ?? x.fim)}${n ? ` — ${n} ${n === 1 ? "lançamento" : "lançamentos"}, total ${brl(n * Number(x.valor_cents))}` : ""}.` +
+      `\nNo último mês eu aviso para você renovar e dizer se houve reajuste. Para parar antes, diga “não pago mais ${x.descricao.toLowerCase()}”.`;
+  } else {
+    reply += `\nVou lançar sozinho ${x.frequencia === "semanal" ? "toda semana" : x.frequencia === "anual" ? "todo ano" : "todo mês"}, sem data para terminar${x.proxima ? `; o próximo é em ${dateBR(r.primeira)}` : ""}. Para parar, é só dizer “não pago mais ${x.descricao.toLowerCase()}”.`;
+  }
   if (r.data_mes_atual) {
     reply += `\n\nA deste mês (${dateBR(r.data_mes_atual)}) já passou. Quer que eu registre também? (*sim* / *não*)`;
     return { reply, pending: { kind: "confirm_create", interp: { ...i, intent: tipo === "receita" ? "CREATE_INCOME" : "CREATE_EXPENSE", recorrente: false, data: r.data_mes_atual, data_explicita: true } } };
   }
   return { reply, pending: null };
+}
+
+const MESES_ABR = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+const mesAno = (iso?: string | null) => iso ? `${MESES_ABR[Number(iso.slice(5, 7)) - 1]}/${iso.slice(0, 4)}` : "";
+const SEM_FIM = /\b(sem (?:data de )?fim|sem (?:data para|prazo para) (?:acabar|terminar)|sem prazo|prazo indeterminado|indeterminad\w*|para sempre|pra sempre|nao tem fim|nao termina|ate eu cancelar|ate cancelar)\b/;
+/** Período de uma conta fixa dito na frase: "por 12 meses", "até dezembro de 2027", "sem fim". */
+function periodFrom(text: string): { meses?: number; sem_fim?: boolean } {
+  const n = norm(text);
+  if (SEM_FIM.test(n)) return { sem_fim: true };
+  if (!/\b(por|durante|ate|pelos? proximos?|nos proximos|meses|mes|ano|anos)\b/.test(n)) return {};
+  const m = parsePrazo(text.replace(/\btodo (?:dia|mes|ano)\b[^,.;]*/gi, (x) => /(\d+)\s*(mes|meses|ano|anos)\b/i.test(x) ? x : " "));
+  return m ? { meses: m } : {};
 }
 
 /** Valor que veio de um áudio e merece confirmação: escrito por extenso sem "reais" ou muito baixo. */
@@ -581,6 +616,18 @@ async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
   const text = c.msg.content;
   const n = norm(text);
   const agentAnswer = p.kind === "agent" && !/^(nao|cancela|cancelar|cancele|esquece|deixa pra la|deixa|para|pare)[.!]*$/.test(n);
+  // pergunta pendente de conta fixa, mas a pessoa mudou de assunto: esquece a pergunta e trata o pedido novo
+  if ((p.kind === "ask_period" || p.kind === "renew_recurring") && n.split(" ").length > 5 && looksLikeNewCommand(text, c.uc)
+      && !(p.kind === "renew_recurring" && extractAmount(text).valor)) { c.dropPending = true; return null; }
+  if (p.kind === "renew_recurring") return renewAnswer(p, c);
+  if (p.kind === "ask_period") {
+    if (NO.test(n) && !SEM_FIM.test(n)) return { reply: "Ok, cancelado. 👍", pending: null };
+    const per = YES.test(n) ? { meses: 12 } : periodFrom(text) ?? {};
+    const so = /^\s*(\d{1,3})\s*$/.exec(n);
+    if (so) per.meses = Math.min(Math.max(1, Number(so[1])), 120);
+    if (per.meses === undefined && !per.sem_fim) return { reply: "Não entendi o período. Responda, por exemplo: *12 meses*, *até dezembro de 2027* ou *sem fim*.", pending: p };
+    return recurringFlow({ ...p.interp, ...per }, c);
+  }
   if (NO.test(n) && p.kind !== "ask_correction" && !agentAnswer) return { reply: "Ok, cancelado. 👍", pending: null };
   const yes = YES.test(n);
 
@@ -1033,10 +1080,56 @@ async function budgetsQuery(c: Ctx): Promise<Outcome> {
 // ---------------------------------------------------------------------------
 // Contas fixas (recorrências) e alertas
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Renovar conta fixa (reajuste): "o aluguel teve reajuste para 1.350", "renovar a escola por mais 12 meses"
+// ---------------------------------------------------------------------------
+const RENEW_RX = /\b(renov\w*|reajust\w*|aument(?:ou|o|ar)|novo valor|mais \d+ meses|prorrog\w*)\b/;
+async function renewFlow(c: Ctx): Promise<Outcome | null> {
+  const n = norm(c.msg.content);
+  if (!RENEW_RX.test(n)) return null;
+  const r = await c.deps.db.rpc<any>("fe_recurrings", c.user, {});
+  const found = (r.itens ?? []).filter((x: any) => {
+    const d = norm(x.descricao ?? "");
+    const words = d.split(/\s+/).filter((w: string) => w.length >= 4 && !/^(para|conta|todo|mensal)$/.test(w));
+    return d && (n.includes(d) || words.some((w: string) => n.includes(w)) || (x.subcategoria && n.includes(norm(x.subcategoria))));
+  });
+  if (!found.length) return null;
+  if (found.length > 1) return { reply: `Qual conta fixa? ${found.map((x: any) => x.descricao).join(" · ")}` };
+  const x = found[0];
+  const p = { kind: "renew_recurring" as const, id: x.id, nome: x.descricao, valor_cents: Number(x.valor_cents) };
+  return renewAnswer(p, c, true);
+}
+
+async function renewAnswer(p: { id: string; nome: string; valor_cents: number; aguardando_valor?: boolean }, c: Ctx, primeira = false): Promise<Outcome> {
+  const text = c.msg.content, n = norm(text);
+  const encerrar = /\b(encerr\w*|cancel\w*|nao (?:quero )?renov\w*|acabou|terminou|parar|nao pago mais)\b/.test(n);
+  const mesmo = /\b(mesmo valor|sem reajuste|nao (?:teve|houve|tem) reajuste|igual|manter|mantem|mantenha)\b/.test(n) || (!primeira && YES.test(n));
+  const meses = /\b(mes|meses|ano|anos)\b/.test(n) ? (parsePrazo(text) ?? 12) : 12;
+  const a = extractAmount(text.replace(/\d+\s*(?:meses|mes|anos?)\b/gi, " "));
+  const valor = a.valor && a.valor > 0 ? a.valor : undefined;
+  if (encerrar) {
+    await c.deps.db.rpc("fe_renew_recurring", c.user, { id: p.id, encerrar: true, origem: origin(c) });
+    return { reply: `Ok, não vou renovar **${p.nome}**. Os meses já lançados continuam; depois do último ela para.`, pending: null };
+  }
+  if (!valor && !mesmo) {
+    if (!primeira && NO.test(n)) return { reply: `Tudo bem, não renovei **${p.nome}** agora. Quando quiser, diga “renovar ${p.nome.toLowerCase()}”.`, pending: null };
+    if (/\breajust|aument|novo valor/.test(n) || p.aguardando_valor) {
+      return { reply: `Qual é o novo valor de **${p.nome}**? (antes: ${brl(p.valor_cents)})`, pending: { kind: "renew_recurring", ...p, aguardando_valor: true } };
+    }
+    return { reply: `Renovo **${p.nome}** por mais ${meses} meses com o mesmo valor (${brl(p.valor_cents)})? Responda *sim*, o *novo valor* (ex.: ${brl(Math.round(p.valor_cents * 1.05))}) ou *encerrar*.`, pending: { kind: "renew_recurring", ...p } };
+  }
+  const r = await c.deps.db.rpc<any>("fe_renew_recurring", c.user, { id: p.id, meses, ...(valor ? { valor } : {}), origem: origin(c) });
+  const x = r.recorrencia;
+  return {
+    reply: `🔄 Renovei **${x.descricao}**: ${brl(x.valor_cents)}${valor && Math.round(valor * 100) !== p.valor_cents ? ` (antes ${brl(p.valor_cents)})` : ""} de ${mesAno(r.de)} até ${mesAno(x.ultima ?? r.ate)}. No último mês eu aviso de novo.`,
+    pending: null,
+  };
+}
+
 async function recurringsQuery(c: Ctx): Promise<Outcome> {
   const r = await c.deps.db.rpc<any>("fe_recurrings", c.user, {});
   if (!r.itens.length) return { reply: "Você ainda não tem contas fixas cadastradas. Ex.: “minha internet custa 120 todo dia 10”. 🔄" };
-  const line = (x: any) => `• ${x.descricao}: ${brl(x.valor_cents)} ${x.quando}${x.cartao ? ` (cartão ${x.cartao})` : ""}${x.proxima ? ` — próx. ${dateBR(x.proxima)}` : ""}`;
+  const line = (x: any) => `• ${x.descricao}: ${brl(x.valor_cents)} ${x.quando}${x.cartao ? ` (cartão ${x.cartao})` : ""}${x.proxima ? ` — próx. ${dateBR(x.proxima)}` : ""}${x.fim ? ` · até ${mesAno(x.ultima ?? x.fim)}${x.renovar ? " ⚠️ renovar" : ""}` : ""}`;
   const desp = r.itens.filter((x: any) => x.tipo === "despesa"), rec = r.itens.filter((x: any) => x.tipo === "receita");
   let reply = "";
   if (rec.length) reply += `💰 Receitas fixas:\n${rec.map(line).join("\n")}\n`;

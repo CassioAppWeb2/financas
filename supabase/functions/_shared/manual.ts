@@ -108,13 +108,27 @@ O campo *Forma de pagamento* (Pix, Débito, Dinheiro, Boleto…) fica salvo e ap
 • Contas fixas pagas por conta (aluguel, internet, salário) entram como pendentes todo mês; as do cartão são automáticas (entram na fatura).`,
   },
   {
-    id: "fixas", titulo: "Contas fixas (todo mês)",
-    chaves: { "conta fixa": 4, "contas fixas": 4, recorren: 4, "todo mes": 3, mensal: 2, assinatura: 2, "cancelar assinatura": 3, salario: 1, aluguel: 1, "quinto dia util": 3 },
-    texto: `🔄 *Contas fixas* (aluguel, internet, assinaturas, salário…)
+    id: "fixas", titulo: "Contas fixas (todo mês), período e renovação",
+    chaves: { "conta fixa": 4, "contas fixas": 4, recorren: 4, "todo mes": 3, mensal: 2, assinatura: 2, "cancelar assinatura": 3, salario: 1, aluguel: 1, "quinto dia util": 3, reajust: 4, renova: 4, "12 meses": 3, "ate quando": 3, periodo: 2, "meses a frente": 3, "proximos meses": 2 },
+    texto: `🔄 *Contas fixas* (aluguel, escola, internet, assinaturas, salário…)
 • *Pelo chat*: “minha internet custa 120 todo dia 10”, “recebo 7 mil todo quinto dia útil”, “a Netflix é 55 por mês no Nubank”.
-• *No app*: menu *Contas fixas* → *Nova conta fixa*.
+• *No app*: menu *Contas fixas* → *Nova conta fixa*, e escolha *Por quanto tempo*.
+*Período:* eu pergunto até quando lançar (o normal é *12 meses*; dá para dizer “24 meses”, “até dezembro de 2027” ou “sem fim”). Todos os meses do período ficam programados como *previstos* — assim você navega pelos meses à frente e já vê o total de despesas de cada mês.
+*Renovação e reajuste:* quando chega o último mês, eu aviso (no sininho 🔔, no celular e no Telegram) e pergunto se houve reajuste. Responda “mesmo valor”, o novo valor (ex.: “1.350”) ou “encerrar”. Também dá para dizer a qualquer momento: “a escola teve reajuste para 1.150” ou tocar em *Renovar* em *Contas fixas*. O que já passou não muda; o novo valor vale dali para frente, por mais 12 meses.
 • Para parar: “não pago mais a Netflix”, ou abra a conta fixa e toque em *Encerrar*.
-Todo mês o app lança sozinho. Se for paga por conta, ela aparece em *Pendências* para você confirmar com 👍; se for no cartão, já entra na fatura.`,
+Se for paga por conta, cada mês aparece em *Pendências* para você confirmar com 👍; se for no cartão, já entra na fatura.`,
+  },
+  {
+    id: "avisos", titulo: "Avisos e notificações no celular",
+    chaves: { notifica: 4, aviso: 3, avisos: 3, sininho: 4, sino: 3, alerta: 2, "push": 3, lembrar: 2, "me avisa": 3, "nao recebo": 2 },
+    texto: `🔔 *Avisos e notificações*
+Eu aviso quando uma conta *vence* (hoje/amanhã) ou *atrasa*, quando uma *conta fixa chega ao último mês* (para conferir reajuste e renovar), fatura do cartão, orçamento passando do limite, acertos da família e metas atingidas.
+*No app:* o sininho 🔔 no canto de cima mostra as novidades sempre que você abre o app — no celular ou no computador.
+*No celular com o app fechado:* *Configurações → Avisos → Ativar notificações neste aparelho* e permita. Faça isso em cada aparelho (celular, computador).
+• *iPhone:* só funciona com o app instalado na Tela de Início (Safari → Compartilhar → Adicionar à Tela de Início), aberto por esse ícone, iOS 16.4 ou mais novo.
+• *Android/computador:* funciona pelo Chrome, Edge ou Firefox.
+*Telegram:* com o Telegram conectado, os avisos chegam lá também (dá para desligar em *Configurações → Avisos*). Para renovar uma conta fixa, é só responder a mensagem.
+Os avisos chegam entre 8h e 21h. Se bloqueou sem querer, libere as notificações do site/app nas configurações do celular ou do navegador.`,
   },
   {
     id: "cartoes", titulo: "Cartões de crédito e faturas",
@@ -295,7 +309,7 @@ Dica: foto reta, com boa luz e o cupom inteiro aparecendo.`,
 ];
 
 // ---------------------------------------------------------------------------
-const HOWTO = /\b(como (?:eu |que |posso |a gente |faco|faz|fazer|uso|usar|funciona|cadastr|lanc|coloc|conect|instal|import|export|apag|exclu|corrig|edit|mud|troc|cri|adicion|marc|vej|ver|pago|pag|recebo|divid|convid|ativ|desativ|tir|baix|abr|consig|configur|mand|envi|grav|ouc|ouvir|acess|entr|sai|atualiz|registr|anot|defin|guard)\w*|onde (?:fica|vejo|eu|esta|tem|acho|encontro|clico|toco)|aonde|o que (?:e|significa|quer dizer)|o que sao|pra que serve|para que serve|qual a diferenca|nao consigo|nao estou conseguindo|nao aparece|nao apareceu|nao funciona|nao carrega|nao responde|nao deixa|deu erro|da erro|esta dando|fica pedindo|pede toda vez|me ensina|ensina|me explica|explica|tem como|da pra|da para|e possivel|consigo|duvida|tutorial|passo a passo|manual|ajuda com|ajuda para|ajuda pra|sem conexao)\b/;
+const HOWTO = /\b(como (?:eu |que |posso |a gente |faco|faz|fazer|uso|usar|funciona|cadastr|lanc|coloc|conect|instal|import|export|apag|exclu|corrig|edit|mud|troc|cri|adicion|marc|vej|ver|pago|pag|recebo|divid|convid|ativ|desativ|tir|baix|abr|consig|configur|mand|envi|grav|ouc|ouvir|acess|entr|sai|atualiz|renov|reajust|encerr|registr|anot|defin|guard)\w*|onde (?:fica|vejo|eu|esta|tem|acho|encontro|clico|toco)|aonde|o que (?:e|significa|quer dizer)|o que sao|pra que serve|para que serve|qual a diferenca|nao consigo|nao estou conseguindo|nao aparece|nao apareceu|nao funciona|nao carrega|nao responde|nao deixa|deu erro|da erro|esta dando|fica pedindo|pede toda vez|me ensina|ensina|me explica|explica|tem como|da pra|da para|e possivel|consigo|duvida|tutorial|passo a passo|manual|ajuda com|ajuda para|ajuda pra|sem conexao)\b/;
 // consultas de finanças que começam parecido mas NÃO são dúvidas sobre o app
 const FINANCE_Q = /\b(como (?:esta|estao|anda|andam|vai|vao|ficou|fica|estou|estamos)|quanto|qual (?:minha|meu|foi)|posso comprar|posso gastar)\b/;
 
