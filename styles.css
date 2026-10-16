@@ -631,3 +631,16 @@ svg.rot90 { transform: rotate(90deg); }
 .aviso-acoes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 @media print { .bell { display: none; } }
 .rota-chat .bell { display: none; }
+
+/* caixinha "Mostrar senha" */
+.check { display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 14px; color: var(--ink-2); cursor: pointer; user-select: none; }
+.check input { width: 18px; height: 18px; accent-color: var(--brand); margin: 0; }
+
+/* reportar erro */
+.rep-fotos { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.rep-foto { position: relative; width: 76px; height: 76px; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: var(--surface-2); }
+.rep-foto img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rep-foto button { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; border-radius: 50%; border: 0; background: rgba(0,0,0,.6); color: #fff; font-size: 14px; line-height: 22px; padding: 0; cursor: pointer; }
+.rep-add { width: 76px; height: 76px; border-radius: 10px; border: 1.5px dashed var(--line); background: transparent; color: var(--ink-2); display: grid; place-items: center; cursor: pointer; font-size: 12px; text-align: center; padding: 4px; }
+.rep-add:hover { border-color: var(--brand); color: var(--brand); }
+textarea.input { resize: vertical; min-height: 130px; font: inherit; line-height: 1.45; }

@@ -4,6 +4,7 @@ import { brl, incomeExpenseChart, lineChart, categoryBars } from "./charts.js";
 import * as F2 from "./fase2.js";
 import { icon, logo } from "./icons.js";
 import { mercadoView } from "./mercado.js";
+import { reportCard, openReport, noteRoute } from "./relato.js";
 import { initAvisos, refreshAvisos, settingsCard, bindSettings } from "./avisos.js";
 import { pref, setPref, applyTheme, biometricAvailable, lockEnabled, enableLock, disableLock, setupLock } from "./prefs.js";
 applyTheme();
@@ -153,6 +154,7 @@ async function router(opts) {
   const route = location.hash.replace(/^#\/?/, "").split("?")[0];
   viewRefresh = null;
   document.body.classList.toggle("rota-chat", route.startsWith("assistente"));
+  noteRoute(route);
   const page = silent ? $("#page") : shell(route);
   const y = window.scrollY, py = page.scrollTop;
   if (!silent) page.innerHTML = `<div class="empty">Carregando…</div>`;
@@ -225,13 +227,15 @@ function authView(mode = "entrar") {
     <p class="lead">${signup ? "Controle suas finanças só conversando." : "Entre para falar com seu assistente financeiro."}</p>
     ${signup ? `<div class="field"><label for="name">Seu nome</label><input class="input" id="name" autocomplete="name" required></div>` : ""}
     <div class="field"><label for="email">E-mail</label><input class="input" id="email" type="email" autocomplete="email" required></div>
-    <div class="field"><label for="pass">Senha</label><input class="input" id="pass" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="6" required></div>
+    <div class="field"><label for="pass">Senha</label><input class="input" id="pass" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="6" required>
+      <label class="check" for="showPass"><input type="checkbox" id="showPass"> Mostrar senha</label></div>
     <p class="small expense hidden" id="authErr"></p>
     <button class="btn primary" style="width:100%;justify-content:center;padding:12px" id="authBtn">${signup ? "Criar conta" : "Entrar"}</button>
     <p class="small muted" style="text-align:center;margin-top:16px">${signup ? "Já tem conta?" : "Ainda não tem conta?"}
       <a href="#" id="swap">${signup ? "Entrar" : "Criar conta"}</a></p>
   </form></div>`;
   $("#swap").onclick = (e) => { e.preventDefault(); authView(signup ? "entrar" : "criar"); };
+  $("#showPass").onchange = (e) => { $("#pass").type = e.target.checked ? "text" : "password"; };
   $("#authForm").onsubmit = async (e) => {
     e.preventDefault();
     const err = $("#authErr"), btn = $("#authBtn");
@@ -1074,6 +1078,7 @@ async function settings(page) {
           <div class="row"><button type="button" class="btn ${lockEnabled() ? "" : "primary"}" id="lockBtn">${lockEnabled() ? "Desativar bloqueio" : "Ativar bloqueio"}</button><span class="small muted" id="lockMsg">${lockEnabled() ? "Ativado neste aparelho." : ""}</span></div>
           <span class="small muted">Ao abrir o app (ou voltar depois de 2 minutos), ele pede o Face ID ou a digital do aparelho. Vale só para este celular.</span></div>
       </div>
+      ${reportCard()}
       <div class="card"><h2>Conta</h2><p class="small muted">${esc(api.getSession()?.user?.email || "")}</p><button class="btn" id="out">Sair</button>
         ${fam.titular ? `<div class="danger-zone"><h3>Zerar a conta</h3><p class="small muted">Apaga todos os lançamentos para recomeçar do zero${family() ? " (vale para toda a família)" : ""}. Não dá para desfazer.</p>
           <button class="btn danger" id="resetBtn">Zerar a conta…</button></div>` : ""}</div>
@@ -1088,6 +1093,7 @@ async function settings(page) {
     catch (e) { $("#lockMsg").textContent = e?.name === "NotAllowedError" ? "Cancelado." : "Não foi possível ativar neste aparelho."; }
   };
   bindSettings();
+  $("#reportBtn").onclick = () => openReport({ api, modal, toast, esc, state });
   if ($("#resetBtn")) $("#resetBtn").onclick = () => resetDialog(() => { state.boot = null; location.hash = "#/"; });
 
   $("#pf").onsubmit = async (e) => {
