@@ -7,6 +7,7 @@ import { transcribeAudio, StatementError, type AiConfig } from "./ai.ts";
 import type { AudioStore } from "./storage.ts";
 import { ensureMarket } from "./mercado.ts";
 import { ensureVapid } from "./webpush.ts";
+import { sendReport, ReportError, type ReportConfig } from "./report.ts";
 
 export const CORS = {
   "access-control-allow-origin": "*",
@@ -27,6 +28,9 @@ export interface AppDeps {
   extract?: AssistantDeps["extract"];
   getUserId: (token: string) => Promise<string | null>;
   marketFetch?: typeof fetch;
+  /** "Reportar um erro": para onde e como enviar */
+  report?: ReportConfig;
+  reportFetch?: typeof fetch;
 }
 
 // limite simples por instância: 30 mensagens/minuto por usuário
@@ -57,6 +61,16 @@ export function createAppHandler(deps: AppDeps) {
     if (body?.acao === "push_chave") {
       try { return json({ chave: (await ensureVapid(deps.db)).publicKey }); }
       catch (e) { return json({ error: `Não consegui preparar as notificações (${(e as Error).message}).` }, 500); }
+    }
+
+    // Configurações → Reportar um erro (texto + imagens → e-mail)
+    if (body?.acao === "reportar_erro") {
+      if (rateLimited("relato:" + userId, 5, 10 * 60_000)) return json({ error: "Muitos relatos em pouco tempo. Aguarde alguns minutos." }, 429);
+      try { return json(await sendReport({ db: deps.db, cfg: deps.report ?? { to: "cassio_filipin@hotmail.com" }, fetch: deps.reportFetch }, userId, body)); }
+      catch (e) {
+        const m = (e as Error).message;
+        return json({ error: e instanceof ReportError || /detalhe|muitos relatos/i.test(m) ? m : `Não consegui enviar o relato (${m}).` }, e instanceof ReportError ? 400 : 500);
+      }
     }
 
     // Tela "Mercado": indicadores do Banco Central (busca de novo se estiverem velhos ou se pedirem)

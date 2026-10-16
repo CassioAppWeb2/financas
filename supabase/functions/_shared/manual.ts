@@ -119,6 +119,13 @@ O campo *Forma de pagamento* (Pix, Débito, Dinheiro, Boleto…) fica salvo e ap
 Se for paga por conta, cada mês aparece em *Pendências* para você confirmar com 👍; se for no cartão, já entra na fatura.`,
   },
   {
+    id: "reportar", titulo: "Reportar um erro do app",
+    chaves: { "reportar": 4, "relatar": 4, "bug": 3, "erro no app": 4, "deu erro": 2, "problema no app": 3, "avisar um erro": 4, "suporte": 3, "falar com o responsavel": 3 },
+    texto: `🐞 *Reportar um erro*
+Em *Configurações → Reportar um erro*: conte o que aconteceu (em qual tela estava, o que fez e o que apareceu), junte prints da tela se puder (até 5 imagens; no computador dá para colar com Ctrl+V) e toque em *Enviar*.
+O relato vai direto para o e-mail do responsável pelo app, com as imagens e informações do aparelho (tela, navegador, versão). Você recebe um *protocolo* — se ele precisar de mais detalhes, responde no seu e-mail.`,
+  },
+  {
     id: "avisos", titulo: "Avisos e notificações no celular",
     chaves: { notifica: 4, aviso: 3, avisos: 3, sininho: 4, sino: 3, alerta: 2, "push": 3, lembrar: 2, "me avisa": 3, "nao recebo": 2 },
     texto: `🔔 *Avisos e notificações*

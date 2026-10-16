@@ -33,7 +33,14 @@ const fakeExtract = process.env.FAKE_EXTRACT ? async (_b: Uint8Array, mime: stri
     { data: today, descricao: "PAGAMENTO RECEBIDO", valor: -400 },
   ],
 }) : undefined;
-const assistant = createAppHandler({ db, getUserId: async (t) => tokens.get(t)?.id ?? null, extract: fakeExtract, marketFetch: fakeMarketFetch() });
+const assistant = createAppHandler({ db, getUserId: async (t) => tokens.get(t)?.id ?? null, extract: fakeExtract, marketFetch: fakeMarketFetch(),
+  // relatos de erro: em vez de mandar e-mail de verdade, mostra no terminal
+  report: { to: "cassio_filipin@hotmail.com", resendKey: "local" },
+  reportFetch: (async (_u: string, init: RequestInit) => {
+    const b = JSON.parse(String(init.body));
+    console.log(`[e-mail simulado] para ${b.to} — ${b.subject} — ${b.attachments.length} anexo(s)`);
+    return new Response(JSON.stringify({ id: "local" }), { status: 200 });
+  }) as typeof fetch });
 
 Bun.serve({
   port: PORT,

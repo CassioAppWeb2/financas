@@ -2,6 +2,7 @@
 // SUPABASE_URL, SUPABASE_ANON_KEY e SUPABASE_SERVICE_ROLE_KEY são fornecidas automaticamente.
 import type { AiConfig } from "./ai.ts";
 import type { TelegramConfig, WhatsAppConfig } from "./channels.ts";
+import type { ReportConfig } from "./report.ts";
 
 declare const Deno: { env: { get(k: string): string | undefined } };
 const env = (k: string) => Deno.env.get(k) || undefined;
@@ -30,4 +31,12 @@ export const waConfig: WhatsAppConfig = {
 export const tgConfig: TelegramConfig = {
   token: env("TELEGRAM_BOT_TOKEN"),
   secret: env("TELEGRAM_WEBHOOK_SECRET"),
+};
+
+/** "Reportar um erro" no app: e-mail pela Resend (segredo RESEND_API_KEY); sem ele, vai pelo Telegram. */
+export const reportConfig: ReportConfig = {
+  resendKey: env("RESEND_API_KEY"),
+  to: env("REPORT_EMAIL") || "cassio_filipin@hotmail.com",
+  from: env("REPORT_FROM"),
+  tgToken: env("TELEGRAM_BOT_TOKEN"),
 };
