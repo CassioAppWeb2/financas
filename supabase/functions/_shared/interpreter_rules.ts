@@ -230,7 +230,7 @@ export function detectMember(n: string, ctx: UserContext): string | undefined {
 const SPLIT_WORDS = /\b(dividid[oa]s?|dividir|dividimos|dividi|divide|rachad[oa]s?|rachar|rachamos|rachei|racha|meio a meio|metade cada|metade (pra|para) cada|cada um (com|paga|pagou) (a )?metade)\b/;
 const SPLIT_HALVES = /\bmetade (?:no|na|pelo|pela|com|do|da|em|pra|pro|para|de) (.+?)(?:,|\.)? e (?:a )?(?:outra )?metade (?:no|na|pelo|pela|com|do|da|em|pra|pro|para|de) (.+)$/;
 
-function memberIn(seg: string, ctx: UserContext): string | undefined {
+function memberIn(seg: string, ctx: UserContext, pronomes = false): string | undefined {
   const membros = ctx.membros ?? [];
   if (/\b(meu|minha|eu|mim)\b/.test(seg)) return membros.find((m) => m.eu)?.id;
   for (const m of membros.filter((x) => !x.eu)) {
@@ -238,12 +238,36 @@ function memberIn(seg: string, ctx: UserContext): string | undefined {
     if (first.length >= 2 && new RegExp(`(^|[^a-z])${first}([^a-z]|$)`).test(seg)) return m.id;
   }
   if (membros.length === 2 && /\b(dela|dele|da minha esposa|do meu marido|da esposa|do marido)\b/.test(seg)) return membros.find((m) => !m.eu)?.id;
+  if (pronomes && membros.length === 2 && /\b(ela|ele|esposa|marido)\b/.test(seg)) return membros.find((m) => !m.eu)?.id;
   return undefined;
 }
 
-export function detectSplit(text: string, ctx: UserContext): { partes?: NonNullable<Interpretation["partes"]>; clean: string } | null {
-  if ((ctx.membros?.length ?? 0) < 2) return null;
+/** "metade", "meio a meio", "partes iguais"… */
+export const SPLIT_EQUAL = /\b(metade|meio a meio|partes iguais|igualmente|por igual|dividid[oa]s? igual|50 ?% (cada|pra cada|para cada)|50 ?por ?cento cada)\b/;
+
+/**
+ * Quanto fica para cada um: "eu 1.800 e a Bruna 1.200", "a Bruna fica com 1.200", "60% meu e 40% da Bruna",
+ * "parte da Bruna 1.200". Devolve só as partes com valor ou percentual (a que faltar é o resto do total).
+ */
+export function parseShares(text: string, ctx: UserContext): { igual?: boolean; partes?: { membro: string; valor?: number; percentual?: number }[] } {
   const n = norm(text);
+  const partes: { membro: string; valor?: number; percentual?: number }[] = [];
+  for (const seg of n.split(/\s+e\s+|;|\s*,\s+(?=\D)|\s+\/\s+/)) {
+    const membro = memberIn(seg, ctx, true);
+    if (!membro || partes.some((x) => x.membro === membro)) continue;
+    const pct = seg.match(/(\d{1,3}(?:[.,]\d+)?)\s*(?:%|por ?cento)/);
+    if (pct) { const v = Number(pct[1].replace(",", ".")); if (v > 0 && v <= 100) partes.push({ membro, percentual: v }); continue; }
+    const v = extractAmount(seg.replace(/\b(\d+)\s*(x|vezes|parcelas)\b/g, "")).valor;
+    if (v && v > 0) partes.push({ membro, valor: v });
+  }
+  if (partes.length) return { partes };
+  return SPLIT_EQUAL.test(n) ? { igual: true } : {};
+}
+
+export function detectSplit(text: string, ctx: UserContext): { partes?: NonNullable<Interpretation["partes"]>; clean: string; igual?: boolean } | null {
+  if ((ctx.membros?.length ?? 0) < 2) return null;
+  // "dividido em 10x" é parcelamento, não divisão entre pessoas
+  const n = norm(text).replace(/\b(dividid[oa]s?|dividi|divide|dividir|dividimos)\s+em\s+\d+\s*(x|vezes|parcelas|prestacoes)\b/g, (m) => "#".repeat(m.length));
   const h = n.match(SPLIT_HALVES);
   if (h) {
     const partes: NonNullable<Interpretation["partes"]> = [];
@@ -261,7 +285,7 @@ export function detectSplit(text: string, ctx: UserContext): { partes?: NonNulla
       partes.push(cc ? { membro, cartao: cc } : conta ? { membro, conta } : cartoes ? { membro, cartao_do_membro: true } : { membro });
     }
     if (partes[0].membro === partes[1].membro) return null;
-    return { partes, clean: text.slice(0, n.indexOf(h[0])).replace(/[,;\s]+$/, "") };
+    return { partes, igual: true, clean: text.slice(0, n.indexOf(h[0])).replace(/[,;\s]+$/, "") };
   }
   const m = n.match(SPLIT_WORDS);
   if (!m) return null;
@@ -273,7 +297,10 @@ export function detectSplit(text: string, ctx: UserContext): { partes?: NonNulla
   }
   // corta a parte "dividido com a Bruna..." para não confundir estabelecimento/conta
   const cut = n.lastIndexOf(",", idx) > 0 && n.lastIndexOf(",", idx) > idx - 25 ? n.lastIndexOf(",", idx) : idx;
-  return { clean: text.slice(0, cut).replace(/[,;\s]+$/, "") || text };
+  // quanto fica para cada um (dito depois de "dividido…")
+  const sh = parseShares(n.slice(idx), ctx);
+  const igual = sh.igual || /^(meio a meio|metade)/.test(m[0]);
+  return { clean: text.slice(0, cut).replace(/[,;\s]+$/, "") || text, igual, ...(sh.partes ? { partes: sh.partes } : {}) };
 }
 
 function detectQuery(n: string, text: string, ctx: UserContext): Partial<Interpretation> | null {
@@ -512,8 +539,16 @@ export function interpretRules(input: string, ctx: UserContext): Interpretation 
   const split = tipo === "despesa" && intent === "CREATE_EXPENSE" ? detectSplit(text, ctx) : null;
   if (split) {
     res.dividir = true; res.familia = undefined;
-    if (split.partes) { res.partes = split.partes; res.cartao = undefined; res.conta = undefined; }
+    if (split.igual) res.divisao_igual = true;
+    const comValores = split.partes?.some((x) => x.valor !== undefined || x.percentual !== undefined);
+    if (split.partes && !comValores) { res.partes = split.partes; res.cartao = undefined; res.conta = undefined; }
     else {
+      if (comValores) {
+        // o total é o valor dito antes de "dividido…"; as partes vêm depois
+        res.partes = split.partes;
+        const t = extractAmount(split.clean);
+        res.valor = t.valor; res.alternativas = t.alternativas;
+      }
       const cc = matchCard(split.clean, ctx);
       res.cartao = cc && (/\b(cartao|credito)\b/.test(norm(split.clean)) || !matchAccount(split.clean, ctx)) ? cc : undefined;
       res.conta = !res.cartao ? matchAccount(split.clean, ctx) : undefined;

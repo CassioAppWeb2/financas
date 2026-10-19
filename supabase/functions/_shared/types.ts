@@ -63,7 +63,10 @@ export interface Interpretation {
   dia_util?: number;              // n-ésimo dia útil (recorrência)
   pessoa_id?: string;             // acerto: a outra pessoa da família
   dividir?: boolean;              // compra dividida entre as pessoas da família
-  partes?: { membro: string; cartao?: string; cartao_do_membro?: boolean; conta?: string }[];  // cada parte paga de um jeito
+  /** cada parte: de quem é, quanto (valor em reais ou percentual) e como foi paga */
+  partes?: { membro: string; cartao?: string; cartao_do_membro?: boolean; conta?: string; valor?: number; percentual?: number }[];
+  /** divisão em partes iguais dita na frase ("metade", "meio a meio", "partes iguais") */
+  divisao_igual?: boolean;
   confidence: number;
   provider?: string;
   model?: string;

@@ -164,6 +164,11 @@ export async function interpret(text: string, ctx: UserContext, cfg: AiConfig = 
     if (rules.intent !== "OTHER" && rules.confidence >= ai.confidence) return rules;
     if (rules.valor !== undefined) { ai.valor = rules.valor; ai.alternativas = rules.alternativas; }
     if (rules.parcelas) ai.parcelas = rules.parcelas;
+    // compra dividida entre a família: quem entende a divisão são as regras
+    if (rules.dividir && ai.tipo === "despesa") {
+      ai.dividir = true; ai.partes = rules.partes; ai.divisao_igual = rules.divisao_igual;
+      if (rules.partes?.some((x) => x.valor !== undefined)) ai.valor = rules.valor;
+    }
     if (!ai.data && rules.data) { ai.data = rules.data; ai.data_explicita = rules.data_explicita; }
     if (!ai.periodo && rules.periodo) ai.periodo = rules.periodo;
     ai.saudacao = rules.saudacao;

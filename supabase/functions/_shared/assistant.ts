@@ -7,7 +7,7 @@
 import type { AssistantReply, Card, EngineDb, IncomingMessage, Interpretation, UserContext } from "./types.ts";
 import { runAgent, confirmAgent, type AgentCall, type GeminiContent } from "./agent.ts";
 import { interpret, extractStatement, StatementError, type AiConfig, type Statement } from "./ai.ts";
-import { interpretRules, matchUserCategory, matchCard, matchGoal } from "./interpreter_rules.ts";
+import { interpretRules, matchUserCategory, matchCard, matchGoal, parseShares } from "./interpreter_rules.ts";
 import { guessCategory } from "./categorizer.ts";
 import { extractAmount, findAmounts } from "./money.ts";
 import { resolveDate, addDays } from "./dates.ts";
@@ -46,7 +46,8 @@ type Pending = (
   | { kind: "import_dest"; st: Statement; options: string[]; campo: "cartao" | "conta" }
   | { kind: "confirm_import"; st: Statement; dest: ImportDest }
   | { kind: "ask_member_card"; interp: Interpretation; membro_id: string; options: string[] }
-  | { kind: "confirm_settle"; pessoa_id: string; forma?: string; data?: string; label: string }
+  | { kind: "ask_split"; interp: Interpretation }
+  | { kind: "confirm_settle"; mes?: string; pessoa_id: string; forma?: string; data?: string; label: string }
   | { kind: "agent"; history: GeminiContent[] }
   | { kind: "confirm_value"; interp: Interpretation }
   | { kind: "agent_confirm"; call: AgentCall; history: GeminiContent[] }
@@ -139,6 +140,10 @@ const LANC_VERB = /^(?:eu |nos |a gente )?(gastei|gastamos|paguei|pagamos|compre
 async function investFlow(c: Ctx): Promise<Outcome | null> {
   const text = c.msg.content;
   if (LANC_VERB.test(norm(text))) return null;
+  // "compras de 500 no mercado…" é um gasto, não pergunta sobre o mercado financeiro
+  const lanc = interpretRules(text, c.uc);
+  if (/^CREATE_/.test(lanc.intent) && lanc.confidence >= 0.85 && lanc.valor) return null;
+  if (/\b(dividid[oa]s?|rachad[oa]s?|fiz (umas? )?compras?|gastei|paguei)\b/.test(norm(text))) return null;
   const kind = classifyInvest(text);
   if (kind === "advice") return { reply: adviceReply(await market(c)) };
   // "o que eu tenho na conta X comparado com o mercado" -> comparativo do saldo
@@ -355,7 +360,7 @@ const HELP = `Sou seu assistente financeiro. Basta conversar comigo:
 💰 *Receitas*: “recebi 1.000 de salário”, “entrou 3 mil de vendas”
 💳 *Cartão*: “comprei uma TV de 3.000 em 10x no cartão Nubank”, “quanto está a fatura?”, “paguei a fatura do Nubank”
 📄 *Fatura em PDF*: mande o PDF ou a foto da fatura do cartão (ou do extrato) que eu leio e lanço tudo
-🤝 *Dividir*: “jantar de 150 no Nubank dividido com a Bruna”, “250 no mercado, metade no meu cartão e metade no da Bruna”, “quanto devo?”, “acertei com a Bruna”
+🤝 *Dividir*: “sofá de 3.000 em 10x no Nubank, dividido: eu 1.800 e a Bruna 1.200”, “250 no mercado, metade no meu cartão e metade no da Bruna”, “quanto devo?”, “acertei com a Bruna”
 🛠️ *Cadastros conversando*: “cadastre para a Bruna o cartão Nubank que vence dia 10”, “crie a conta Itaú com saldo de 2.300”, “mude o limite do Nubank para 8 mil”
 🔄 *Contas fixas*: “minha internet custa 120 todo dia 10”, “recebo 7 mil todo quinto dia útil”, “não pago mais a Netflix”
 🎯 *Metas*: “quero juntar 20 mil até dezembro para a viagem”, “guardei 500 na meta viagem”, “como estão minhas metas?”
@@ -738,6 +743,21 @@ async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
       }
       break;
     }
+    case "ask_split": {
+      const membros = c.uc.membros ?? [];
+      const outros = membros.filter((m) => !m.eu);
+      if (n.split(" ").length > 5 && looksLikeNewCommand(text, c.uc)) { c.dropPending = true; return null; }
+      const sh = parseShares(text, c.uc);
+      if (sh.partes) return splitFlow({ ...p.interp, partes: sh.partes, divisao_igual: undefined }, c);
+      if (sh.igual || yes || /\b(igua(l|is)|meio a meio|metade|tanto faz)\b/.test(n)) return splitFlow({ ...p.interp, partes: undefined, divisao_igual: true }, c);
+      // só um número: é a parte da outra pessoa (família de duas pessoas)
+      const pct = n.match(/^(\d{1,3}(?:[.,]\d+)?)\s*(%|por ?cento)$/);
+      if (outros.length === 1 && pct) return splitFlow({ ...p.interp, partes: [{ membro: outros[0].id, percentual: Number(pct[1].replace(",", ".")) }] }, c);
+      const a = extractAmount(text);
+      if (outros.length === 1 && a.valor && n.split(" ").length <= 4) return splitFlow({ ...p.interp, partes: [{ membro: outros[0].id, valor: a.valor }] }, c);
+      if (looksLikeNewCommand(text, c.uc)) { c.dropPending = true; return null; }
+      return { reply: `Não entendi a divisão. Responda *metade*${outros.length === 1 ? `, só o valor de ${first(outros[0].nome)} (ex.: *1.200*)` : ""} ou a parte de cada um (ex.: *eu 1.800 e ${first(outros[0]?.nome ?? "Bruna")} 1.200*).`, pending: p };
+    }
     case "ask_member_card": {
       const card = p.options.find((o) => norm(o) === n) ?? p.options.find((o) => n.includes(norm(o)) || norm(o).includes(n)) ?? matchCard(text, c.uc);
       if (card) {
@@ -749,11 +769,11 @@ async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
     }
     case "confirm_settle": {
       if (/^(ok|okay|dispensa\w*|esquece)\b/.test(n)) {
-        const r = await c.deps.db.rpc<any>("fe_settle", c.user, { pessoa_id: p.pessoa_id, acao: "dispensar", origem: origin(c) });
+        const r = await c.deps.db.rpc<any>("fe_settle", c.user, { pessoa_id: p.pessoa_id, acao: "dispensar", mes: p.mes, origem: origin(c) });
         return { reply: r.status === "nothing" ? "Não há nada pendente. 👍" : `👍 Ok, dispensei o acerto de ${brl(r.valor_cents)} — sem lançamento.`, pending: null };
       }
       if (yes || /\b(paguei|pago|ja paguei)\b/.test(n)) {
-        const r = await c.deps.db.rpc<any>("fe_settle", c.user, { pessoa_id: p.pessoa_id, acao: "pago", forma: p.forma, data: p.data, origem: origin(c) });
+        const r = await c.deps.db.rpc<any>("fe_settle", c.user, { pessoa_id: p.pessoa_id, acao: "pago", forma: p.forma, data: p.data, mes: p.mes, origem: origin(c) });
         if (r.status === "nothing") return { reply: "Não há nada pendente para acertar. 👍", pending: null };
         return { reply: `✅ Acerto registrado: ${r.devedor} pagou ${brl(r.valor_cents)} para ${r.credor}.` +
           (r.transferencia ? `\nLancei como transferência: ${r.conta_origem} → ${r.conta_destino} (não conta como despesa nova).` : `\n(Não lancei transferência porque falta conta cadastrada de um de vocês.)`), pending: null };
@@ -899,24 +919,97 @@ async function agentFlow(c: Ctx, history: GeminiContent[]): Promise<Outcome> {
 // ---------------------------------------------------------------------------
 // Compras divididas e acertos da família
 // ---------------------------------------------------------------------------
+const first = (nome?: string | null) => String(nome ?? "").split(" ")[0];
+/** valor de cada parcela (a 1ª leva os centavos que sobram) */
+const parcelaDe = (cents: number, n: number) => (n > 1 ? Math.floor(cents / n) : cents);
+
+/** Converte "eu 1.800 e Bruna 1.200" / "Bruna 40%" / "Bruna 1.200" (o resto é meu) em partes que fecham o total. */
+function resolveShares(i: Interpretation, c: Ctx): { partes: { membro: string; valor_cents: number }[]; total: number } | { erro: string; precisa_total?: boolean } {
+  const membros = c.uc.membros ?? [];
+  let total = i.valor ? Math.round(i.valor * 100) : undefined;
+  const dadas = (i.partes ?? []).filter((x) => x.valor !== undefined || x.percentual !== undefined);
+  if (dadas.some((x) => x.percentual !== undefined) && !total) return { erro: "Qual foi o valor total da compra?", precisa_total: true };
+  const partes = dadas.map((x) => ({ membro: x.membro, valor_cents: x.valor !== undefined ? Math.round(x.valor * 100) : Math.round((total! * x.percentual!) / 100) }));
+  const soma = partes.reduce((s2, x) => s2 + x.valor_cents, 0);
+  const faltam = membros.filter((m) => !partes.some((x) => x.membro === m.id));
+  if (faltam.length === 1) {
+    if (!total) return { erro: "Qual foi o valor total da compra?", precisa_total: true };
+    const resto = total - soma;
+    if (resto < 0) return { erro: `As partes informadas (${brl(soma)}) passam do valor da compra (${brl(total)}). Como fica a divisão?` };
+    if (resto > 0) partes.push({ membro: faltam[0].id, valor_cents: resto });
+  } else if (faltam.length > 1) {
+    return { erro: `Faltou dizer a parte de ${faltam.map((m) => (m.eu ? "você" : first(m.nome))).join(" e ")}. Como fica a divisão?` };
+  }
+  if (!total) total = soma;
+  const final = partes.reduce((s2, x) => s2 + x.valor_cents, 0);
+  if (final !== total) return { erro: `As partes somam ${brl(final)}, mas a compra é de ${brl(total)}. Como fica a divisão?` };
+  if (partes.filter((x) => x.valor_cents > 0).length < 2) return { erro: "Com esses valores a compra fica toda para uma pessoa só. Como fica a divisão?" };
+  return { partes: partes.filter((x) => x.valor_cents > 0), total };
+}
+
+function askShares(i: Interpretation, c: Ctx): Outcome {
+  const total = Math.round((i.valor ?? 0) * 100);
+  const outros = (c.uc.membros ?? []).filter((m) => !m.eu);
+  const n = (c.uc.membros ?? []).length || 2;
+  const oq = i.descricao ?? i.estabelecimento ?? "a compra";
+  const parc = i.parcelas && i.parcelas > 1 ? ` em ${i.parcelas}x de ${brl(parcelaDe(total, i.parcelas))}` : "";
+  const ex = first(outros[0]?.nome ?? "Bruna");
+  return {
+    reply: `🤝 Como fica a divisão de **${oq}** — ${brl(total)}${parc}?\n• *${n === 2 ? "metade" : "partes iguais"}* — ${brl(Math.floor(total / n))} para cada\n` +
+      (outros.length === 1 ? `• ou só quanto fica para ${ex} (ex.: *${brl(Math.round(total * 0.4)).replace("R$ ", "")}*)\n` : "") +
+      `• ou a parte de cada um (ex.: *eu ${brl(total - Math.round(total * 0.4)).replace("R$ ", "")} e ${ex} ${brl(Math.round(total * 0.4)).replace("R$ ", "")}*)`,
+    pending: { kind: "ask_split", interp: i },
+  };
+}
+
 async function splitFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
-  const partes = i.partes?.map((x) => ({ membro_id: x.membro, cartao: x.cartao, cartao_do_membro: x.cartao_do_membro, conta: x.conta }));
+  // quanto fica para cada um: informado na frase, ou pergunto (se a divisão não for "metade")
+  const comValores = i.partes?.some((x) => x.valor !== undefined || x.percentual !== undefined);
+  let partesValor: { membro: string; valor_cents: number }[] | undefined;
+  if (comValores) {
+    const r = resolveShares(i, c);
+    if ("erro" in r) return { reply: r.erro, pending: r.precisa_total ? { kind: "ask_value", interp: i } : { kind: "ask_split", interp: { ...i, partes: undefined } } };
+    partesValor = r.partes;
+    i = { ...i, valor: r.total / 100 };
+  } else if (!i.divisao_igual && !i.partes?.length && i.valor) {
+    return askShares(i, c);
+  }
+  const partes = partesValor
+    ? partesValor.map((x) => ({ membro_id: x.membro, valor_cents: x.valor_cents }))
+    : i.partes?.map((x) => ({ membro_id: x.membro, cartao: x.cartao, cartao_do_membro: x.cartao_do_membro, conta: x.conta }));
   const r = await c.deps.db.rpc<any>("fe_create_split", c.user, { ...enginePayload(i, c), familia: undefined, dividir: true, partes });
   const total = brl(Math.round((i.valor ?? 0) * 100));
   switch (r.status) {
     case "created": {
+      const n = Number(r.parcelas) || 1;
+      const quem = (id: string, nome: string) => (id === c.user ? "Você" : first(nome));
       const lines = r.partes.map((x: any) => {
-        const quem = x.membro_id === c.user ? "Você" : x.membro;
-        const onde = x.cartao ? `no cartão ${x.cartao}${x.fatura ? ` (fatura de ${dateBR(x.fatura)})` : ""}` : x.conta ? `na conta ${x.conta}` : "";
-        return `• ${quem}: ${brl(x.valor_cents)} ${onde}${x.deve_para ? ` — a acertar com ${x.deve_para === c.uc.nome ? "você" : x.deve_para.split(" ")[0]}` : ""}`;
+        const pn = Number(x.parcelas) || 1;
+        const parc = pn > 1 ? ` (${pn}x de ${brl(parcelaDe(Number(x.valor_cents), pn))})` : "";
+        const devedorEhEu = x.membro_id === c.user, credorEhEu = x.deve_para && x.deve_para === c.uc.nome;
+        const acerto = x.deve_para ? (devedorEhEu ? ` — a pagar para ${first(x.deve_para)}` : credorEhEu ? " — a pagar para você" : ` — a pagar para ${first(x.deve_para)}`) : "";
+        const onde = r.partes.every((y: any) => y.cartao === x.cartao && y.conta === x.conta) ? "" : x.cartao ? ` no cartão ${x.cartao}` : x.conta ? ` na conta ${x.conta}` : "";
+        return `• ${quem(x.membro_id, x.membro)}: ${brl(x.valor_cents)}${parc}${onde}${acerto}`;
       });
       const t = r.lancamento;
-      let reply = `✅ Registrei ${total}${t?.categoria ? ` em **${t.categoria}${t.subcategoria ? ` > ${t.subcategoria}` : ""}**` : ""}, dividido:\n${lines.join("\n")}`;
-      if (r.parcelas > 1) reply += `\n(em ${r.parcelas}x)`;
+      const mesmo = r.partes.every((y: any) => y.cartao === r.partes[0].cartao && y.conta === r.partes[0].conta) ? r.partes[0] : null;
+      const meio = mesmo?.cartao ? ` no cartão ${mesmo.cartao}` : mesmo?.conta ? ` na conta ${mesmo.conta}` : "";
+      const parcTotal = n > 1 ? r.partes.reduce((s2: number, x: any) => s2 + parcelaDe(Number(x.valor_cents), Number(x.parcelas) || 1), 0) : 0;
+      let reply = `✅ Registrei${i.descricao ? ` **${i.descricao}**` : ""} — ${total}${n > 1 ? ` em ${n}x` : ""}${meio}${n > 1 && mesmo?.cartao ? ` (parcela de ${brl(parcTotal)} na fatura)` : ""}` +
+        `${t?.categoria ? `, em **${t.categoria}${t.subcategoria ? ` > ${t.subcategoria}` : ""}**` : ""}, dividido:\n${lines.join("\n")}`;
       const devendo = r.partes.filter((x: any) => x.deve_para);
       if (devendo.length) {
-        const outro = devendo[0].deve_para === c.uc.nome ? devendo[0].membro : devendo[0].deve_para;
-        reply += `\n\n🤝 Vou somar isso nos *acertos do mês*. Quando acertarem, diga “acertei com ${outro.split(" ")[0]}” ou toque em *Paguei* no app.`;
+        const d = devendo[0];
+        const pn = Number(d.parcelas) || 1, v = brl(parcelaDe(Number(d.valor_cents), pn));
+        const credorEhEu = d.deve_para === c.uc.nome, devedorEhEu = d.membro_id === c.user;
+        const quanto = credorEhEu ? `fica ${v} a receber de ${first(d.membro)} — e, para ${first(d.membro)}, ${v} a pagar`
+          : devedorEhEu ? `fica ${v} a pagar para ${first(d.deve_para)} — e, para ${first(d.deve_para)}, a receber`
+          : `${first(d.membro)} paga ${v} para ${first(d.deve_para)}`;
+        const venc = d.fatura ? dateBR(d.fatura) : null;
+        reply += d.cartao
+          ? `\n\n📅 ${pn > 1 ? `A cada vencimento da fatura (o primeiro é ${venc})` : `No vencimento da fatura (${venc})`}, ${quanto}. Eu lembro vocês no dia — e aparece nas pendências do início.`
+          : `\n\n🤝 ${quanto[0].toUpperCase()}${quanto.slice(1)}. Aparece nas pendências do início.`;
+        reply += `\nQuando acertarem, toque no 👎 da pendência ou diga “acertei com ${first(credorEhEu ? d.membro : d.deve_para)}”.`;
       }
       return { reply, cards: t ? [{ type: "transaction", data: { ...t, valor_cents: Math.round((i.valor ?? 0) * 100) } }] : undefined, pending: null };
     }
@@ -938,28 +1031,39 @@ async function splitFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
   return { reply: "Não consegui registrar a divisão. Confira os dados e tente de novo.", pending: null };
 }
 
-async function debtsQuery(c: Ctx): Promise<Outcome> {
+/** Acertos do mês; se nada vence este mês, os do próximo vencimento (parcelas divididas vencem com a fatura). */
+async function debtsFor(c: Ctx): Promise<{ d: any; mes?: string }> {
   const d = await c.deps.db.rpc<any>("fe_debts", c.user, {});
-  if (!d.devo.length && !d.recebo.length) return { reply: "Nenhum acerto pendente este mês. 👍" + (d.futuro_cents ? `\n(Há ${brl(d.futuro_cents)} de parcelas divididas para os próximos meses.)` : "") };
+  if (d.devo.length || d.recebo.length || !d.proximo_vencimento) return { d };
+  const mes = String(d.proximo_vencimento).slice(0, 7);
+  return { d: await c.deps.db.rpc<any>("fe_debts", c.user, { mes }), mes };
+}
+
+async function debtsQuery(c: Ctx): Promise<Outcome> {
+  const { d, mes } = await debtsFor(c);
+  if (!d.devo.length && !d.recebo.length) return { reply: "Nenhum acerto pendente. 👍" };
   const lines: string[] = [];
-  for (const x of d.devo) lines.push(`🔴 Você deve ${brl(x.total_cents)} para ${x.pessoa.split(" ")[0]} (${x.itens.length} gasto(s) dividido(s))`);
-  for (const x of d.recebo) lines.push(`🟢 ${x.pessoa.split(" ")[0]} deve ${brl(x.total_cents)} para você (${x.itens.length} gasto(s) dividido(s))`);
+  const venc = (x: any) => { const v = [...new Set(x.itens.map((t: any) => t.vencimento))] as string[]; return v.length === 1 ? ` — vence ${dateBR(v[0])}` : ""; };
+  for (const x of d.devo) lines.push(`🔴 Você deve ${brl(x.total_cents)} para ${first(x.pessoa)}${venc(x)} (${x.itens.length} item(ns))`);
+  for (const x of d.recebo) lines.push(`🟢 ${first(x.pessoa)} deve ${brl(x.total_cents)} para você${venc(x)} (${x.itens.length} item(ns))`);
   const ex = [...d.devo, ...d.recebo][0];
-  return { reply: `🤝 Acertos do mês:\n${lines.join("\n")}\n\nQuando pagarem, diga “acertei com ${ex.pessoa.split(" ")[0]}” (ou “fiz pix pra ${ex.pessoa.split(" ")[0]}”).` };
+  const cab = mes ? `🤝 Nada vence este mês. No próximo vencimento:` : `🤝 Acertos do mês:`;
+  const futuro = d.futuro_cents ? `\n(Depois disso, mais ${brl(d.futuro_cents)} de parcelas divididas nos meses seguintes.)` : "";
+  return { reply: `${cab}\n${lines.join("\n")}${futuro}\n\nQuando pagarem, diga “acertei com ${first(ex.pessoa)}” (ou “fiz pix pra ${first(ex.pessoa)}”).` };
 }
 
 async function settleFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
-  const d = await c.deps.db.rpc<any>("fe_debts", c.user, {});
+  const { d, mes } = await debtsFor(c);
   const devo = d.devo.find((x: any) => x.pessoa_id === i.pessoa_id)?.total_cents ?? 0;
   const recebo = d.recebo.find((x: any) => x.pessoa_id === i.pessoa_id)?.total_cents ?? 0;
-  const nome = (c.uc.membros ?? []).find((m) => m.id === i.pessoa_id)?.nome.split(" ")[0] ?? "a outra pessoa";
+  const nome = first((c.uc.membros ?? []).find((m) => m.id === i.pessoa_id)?.nome) || "a outra pessoa";
   const liquido = devo - recebo;
-  if (!liquido) return { reply: `Não há acerto pendente com ${nome} este mês. 👍`, pending: null };
+  if (!liquido) return { reply: `Não há acerto pendente com ${nome}. 👍`, pending: null };
   const label = liquido > 0 ? `você pagou ${brl(liquido)} para ${nome}` : `${nome} pagou ${brl(-liquido)} para você`;
   const aviso = i.valor && Math.round(i.valor * 100) !== Math.abs(liquido) ? `\n⚠️ O acerto pendente é de ${brl(Math.abs(liquido))} (você falou ${brl(Math.round(i.valor * 100))}). Registro o acerto completo.` : "";
   return {
-    reply: `🤝 Vou registrar que ${label}${i.forma_pagamento ? ` (${i.forma_pagamento})` : ""}, quitando os gastos divididos do mês, e lançar a transferência entre as contas de vocês.${aviso}\nConfirma? (*sim* / *não*) — ou *ok* para só dispensar, sem lançamento.`,
-    pending: { kind: "confirm_settle", pessoa_id: i.pessoa_id!, forma: i.forma_pagamento, data: i.data, label },
+    reply: `🤝 Vou registrar que ${label}${i.forma_pagamento ? ` (${i.forma_pagamento})` : ""}, quitando os gastos divididos ${mes ? `do vencimento de ${dateBR(d.ate).slice(3)}` : "do mês"}, e lançar a transferência entre as contas de vocês.${aviso}\nConfirma? (*sim* / *não*) — ou *ok* para só dispensar, sem lançamento.`,
+    pending: { kind: "confirm_settle", pessoa_id: i.pessoa_id!, forma: i.forma_pagamento, data: i.data, label, mes },
   };
 }
 

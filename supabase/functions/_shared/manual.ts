@@ -160,12 +160,15 @@ Eu leio as compras, sugiro as categorias e mostro uma *prévia*: confira, ajuste
   },
   {
     id: "dividir", titulo: "Dividir gastos e acertos entre a família",
-    chaves: { divid: 4, metade: 3, rachar: 3, acerto: 4, "me deve": 3, "devo": 2, "quanto devo": 3, "paguei para": 2, "recebi da": 2 },
+    chaves: { divid: 4, metade: 3, rachar: 3, acerto: 4, "compartilhad": 3, "parte de cada": 3, "me deve": 3, "devo": 2, "quanto devo": 3, "paguei para": 2, "recebi da": 2 },
     texto: `🤝 *Dividir gastos e acertar*
-• *Pelo chat*: “jantar de 150 no Nubank dividido com a Bruna” (cada um fica com 75; a outra pessoa fica devendo a parte dela), ou “250 no mercado, metade no meu cartão e metade no da Bruna”.
+• *Pelo chat*, diga como foi dividido: “sofá de 3.000 em 10x no Nubank, dividido: eu 1.800 e a Bruna 1.200”, “a Bruna fica com 1.200”, “60% meu e 40% da Bruna” ou “meio a meio”. Se você só disser “dividido com a Bruna”, eu pergunto quanto fica para cada um.
+• Cada um paga no próprio cartão? “250 no mercado, metade no meu cartão e metade no da Bruna” — aí não fica nada a acertar.
+• *No cartão de uma pessoa só*: a fatura do dono do cartão continua com a *parcela inteira*. A parte da outra pessoa vence *junto com cada fatura*: para o dono do cartão aparece “a receber”, e para a outra pessoa “a pagar”, nas pendências do Início e nos avisos (sininho, celular e Telegram) no dia do vencimento.
 • *No app*: no *+*, em *De quem é?*, escolha *Dividir entre nós…* e informe a parte e o meio de pagamento de cada um.
-• Quem deve para quem aparece no botão de pendências do Início (toque em *Ver* → *Acertos da família*). Quando acertarem, toque em *Paguei*/*Recebi* (informe data e forma) — ou *OK* para dispensar sem lançar nada.
+• *Acertar*: nas pendências do Início, toque no 👎 da parcela quando pagar (vira uma transferência entre as contas de vocês). Para acertar tudo de uma vez: *Paguei*/*Recebi* em *Acertos da família* — ou *OK* para dispensar sem lançar nada.
 • Pelo chat: “quanto devo?”, “acertei com a Bruna”.`,
+
   },
   {
     id: "contas", titulo: "Contas bancárias e saldo",

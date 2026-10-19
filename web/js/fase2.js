@@ -863,7 +863,7 @@ export async function debtsCard(host, after, inline = false) {
       <div class="row"><button class="btn small primary" data-pay="${x.pessoa_id}" data-v="${x.total_cents}" data-devo="${devo ? 1 : 0}" data-nome="${C.esc(x.pessoa)}">${devo ? "Paguei" : "Recebi"}</button>
       <button class="btn small" data-ok="${x.pessoa_id}">OK</button></div></div>
     <details><summary class="small" style="cursor:pointer">Ver gastos</summary><div class="list">${x.itens.map((t) => `<div class="item"><div class="emoji">${t.icone || "•"}</div>
-      <div class="body"><div class="title">${C.esc(t.descricao)}</div><div class="sub">${C.dateBR(t.data)}${t.cartao ? ` · 💳 ${C.esc(t.cartao)}` : t.conta ? ` · ${C.esc(t.conta)}` : ""}</div></div>
+      <div class="body"><div class="title">${C.esc(t.descricao)}</div><div class="sub">vence ${C.dateBR(t.vencimento || t.data)}${t.cartao ? ` · 💳 fatura do ${C.esc(t.cartao)}` : t.conta ? ` · ${C.esc(t.conta)}` : ""}</div></div>
       <div class="amount num">${C.brl(t.valor_cents)}</div></div>`).join("")}</div></details></div>`;
   host.innerHTML = `<div class="${inline ? "" : "card "}alerts" style="${inline ? "" : "margin-bottom:14px"}">${inline ? "" : "<h2>🤝 Acertos do mês</h2>"}
     ${d.devo.map((x) => block(x, true)).join("")}${d.recebo.map((x) => block(x, false)).join("")}
@@ -950,6 +950,13 @@ export function splitArea(host, payDefault) {
 const diasEntre = (a, b) => Math.round((Date.parse(b + "T12:00:00Z") - Date.parse(a + "T12:00:00Z")) / 86400000);
 function quando(t, hoje) {
   const n = diasEntre(t.data, hoje);
+  if (t.acerto_lado) {   // parcela de compra dividida: vence com a fatura
+    if (n > 1) return `venceu há ${n} dias (${C.dateBR(t.data)})`;
+    if (n === 1) return "venceu ontem";
+    if (n === 0) return "vence hoje";
+    if (n === -1) return "vence amanhã";
+    return `vence em ${C.dateBR(t.data)}`;
+  }
   const verbo = t.tipo === "receita" ? "previsto" : "vence";
   if (n > 1) return `${t.tipo === "receita" ? "atrasado" : "venceu"} há ${n} dias (${C.dateBR(t.data)})`;
   if (n === 1) return `${t.tipo === "receita" ? "era para" : "venceu"} ontem`;
@@ -985,7 +992,8 @@ export async function pendingCard(host, membro, after) {
     return `<div class="pend-item ${late ? "late" : ""}" data-id="${t.id}">
       <div class="emoji">${t.icone || (t.tipo === "receita" ? "💰" : "🧾")}</div>
       <div class="body"><div class="title">${C.esc(t.descricao || t.categoria || "Lançamento")}</div>
-        <div class="sub">${t.tipo === "receita" ? "A receber" : "A pagar"} · ${quando(t, d.hoje)}${t.conta ? ` · ${C.esc(t.conta)}` : ""}</div></div>
+        <div class="sub">${t.acerto_lado ? (t.acerto_lado === "devo" ? `A pagar para ${C.esc(String(t.pessoa || "").split(" ")[0])}` : `A receber de ${C.esc(String(t.pessoa || "").split(" ")[0])}`)
+          : t.tipo === "receita" ? "A receber" : "A pagar"} · ${quando(t, d.hoje)}${t.acerto_lado ? (t.cartao ? ` · 🤝 dividido no ${C.esc(t.cartao)}` : " · 🤝 dividido") : t.conta ? ` · ${C.esc(t.conta)}` : ""}</div></div>
       <div class="amount num ${t.tipo === "receita" ? "income" : "expense"}">${C.brl(t.valor_cents)}</div>
       <button class="thumb" data-pay="${t.id}" aria-label="${t.tipo === "receita" ? "Marcar como recebido" : "Marcar como pago"}" title="${t.tipo === "receita" ? "Ainda não recebido — toque quando receber" : "Ainda não pago — toque quando pagar"}">${icon("down", 20)}</button>
     </div>`;
@@ -1012,9 +1020,15 @@ export async function pendingCard(host, membro, after) {
     b.disabled = true; b.classList.add("done"); b.innerHTML = icon("up", 20);
     navigator.vibrate?.(20);
     try {
-      await C.api.rpc("app_set_paid", { id: b.dataset.pay, pago: true });
       const t = all.find((x) => x.id === b.dataset.pay);
-      C.toast(t?.tipo === "receita" ? "Recebido 👍" : "Pago 👍");
+      if (t?.acerto_lado) {
+        // parcela de compra dividida: registra o acerto só dela (transferência entre as contas de vocês)
+        const r = await C.api.rpc("app_settle", { ids: [t.id], acao: "pago", forma: "pix" });
+        C.toast(r.status === "nothing" ? "Já estava acertado 👍" : `Acerto de ${C.brl(r.valor_cents)} registrado 👍`);
+      } else {
+        await C.api.rpc("app_set_paid", { id: b.dataset.pay, pago: true });
+        C.toast(t?.tipo === "receita" ? "Recebido 👍" : "Pago 👍");
+      }
       setTimeout(() => { it.classList.add("gone"); setTimeout(() => { it.remove(); after?.(); }, 350); }, 700);
     } catch (y) {
       b.disabled = false; b.classList.remove("done"); b.innerHTML = icon("down", 20); C.toast(y.message);

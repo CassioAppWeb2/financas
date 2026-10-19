@@ -12,7 +12,7 @@ const asUser = <T = any>(uid: string, fn: string, p: object = {}) =>
   });
 const newUser = async (name: string) =>
   (await q(`insert into auth.users(email, raw_user_meta_data) values ($1, $2::jsonb) returning id`, `${name}.${crypto.randomUUID()}@x.com`, { name }))[0].id as string;
-let ca = "", br = "", cardCa = "", cardBr = "", contaBr = "", hoje = "";
+let ca = "", br = "", cardCa = "", cardBr = "", contaBr = "", hoje = "", mesV = "", venc = "";
 
 beforeAll(async () => {
   ca = await newUser("Cássio"); br = await newUser("Bruna");
@@ -48,25 +48,33 @@ describe("divisão de compras", () => {
     expect(d.devo).toEqual([]);
   });
 
-  test("150 no meu cartão dividido: Bruna fica devendo 75", async () => {
+  test("150 no meu cartão dividido: Bruna fica devendo 75, com vencimento na data da fatura", async () => {
     const r = await asUser(ca, "app_save_split", { tipo: "despesa", valor: 150, categoria: "Lazer", descricao: "Jantar", cartao_id: cardCa, dividir: true });
     expect(r.partes.map((x: any) => [x.membro, x.valor_cents, x.cartao, x.deve_para])).toEqual([["Cássio", 7500, "Nubank Cássio", null], ["Bruna", 7500, "Nubank Cássio", "Cássio"]]);
+    venc = r.partes[1].fatura; mesV = venc.slice(0, 7);
     const inv = await asUser(ca, "app_card_invoice", { cartao_id: cardCa });
     expect(inv.fatura.total_cents).toBe(12500 + 15000);
-    const d = await asUser(br, "app_debts");
+    const d = await asUser(br, "app_debts", { mes: mesV });
     expect(d.devo[0].pessoa).toBe("Cássio");
     expect(d.devo[0].total_cents).toBe(7500);
-    const d2 = await asUser(ca, "app_debts");
+    expect(d.devo[0].itens[0].vencimento).toBe(venc);
+    const d2 = await asUser(ca, "app_debts", { mes: mesV });
     expect(d2.recebo[0].total_cents).toBe(7500);
-    const al = await asUser<any[]>(br, "app_alerts");
-    expect(al.some((a) => a.tipo === "acerto" && /75,00/.test(a.texto))).toBe(true);
+    // lembretes: para a Bruna "a pagar" e para o Cássio "a receber", no vencimento da fatura
+    const pb = await asUser(br, "app_pending", { dias: 60 });
+    const ib = pb.proximos.find((t: any) => t.acerto_lado === "devo");
+    expect([ib.tipo, ib.valor_cents, ib.data, ib.pessoa]).toEqual(["despesa", 7500, venc, "Cássio"]);
+    const pc = await asUser(ca, "app_pending", { dias: 60 });
+    const ic = pc.proximos.find((t: any) => t.acerto_lado === "recebo");
+    expect([ic.tipo, ic.valor_cents, ic.data, ic.pessoa]).toEqual(["receita", 7500, venc, "Bruna"]);
   });
 
   test("painel da Bruna: despesas dela, faturas só dos cartões dela, acerto a pagar", async () => {
     const d = await asUser(ca, "app_dashboard", { membro_id: br });
     expect(Number(d.despesas_cents)).toBe(12500 + 7500);
-    expect(Number(d.acertos_a_pagar_cents)).toBe(7500);
-    const dc = await asUser(ca, "app_dashboard", { membro_id: ca });
+    const dv = await asUser(ca, "app_dashboard", { membro_id: br, mes: mesV });
+    expect(Number(dv.acertos_a_pagar_cents)).toBe(7500);
+    const dc = await asUser(ca, "app_dashboard", { membro_id: ca, mes: mesV });
     expect(Number(dc.acertos_a_receber_cents)).toBe(7500);
     const det = await asUser(br, "app_kpi_detail", { painel: "despesas", membro_id: br });
     expect(det.lancamentos.length).toBe(2);
@@ -84,24 +92,24 @@ describe("divisão de compras", () => {
 
   test("Bruna paga o acerto por Pix: vira transferência entre as contas, sem despesa nova", async () => {
     const contaCa = (await asUser<any>(ca, "app_bootstrap")).contas.contas.find((c: any) => c.membro_id === ca).id;
-    const r = await asUser(br, "app_settle", { pessoa_id: ca, acao: "pago", forma: "pix" });
+    const r = await asUser(br, "app_settle", { pessoa_id: ca, acao: "pago", forma: "pix", mes: mesV });
     expect(r.status).toBe("pago");
     expect(r.valor_cents).toBe(7500);
     expect(r.transferencia).toBe(true);
     expect(r.conta_origem).toBe("Itaú Bruna");
     const bal = await asUser<any>(ca, "app_bootstrap");
     expect(bal.contas.contas.find((c: any) => c.id === contaCa).saldo_cents).toBe(7500);
-    expect((await asUser(br, "app_debts")).devo).toEqual([]);
+    expect((await asUser(br, "app_debts", { mes: mesV })).devo).toEqual([]);
     const d = await asUser(ca, "app_dashboard", { membro_id: br });
     expect(Number(d.despesas_cents)).toBe(20000);
   });
 
   test("dispensar (ok) zera sem lançamento", async () => {
     await asUser(ca, "app_save_split", { tipo: "despesa", valor: 40, categoria: "Lazer", descricao: "Sorvete", cartao_id: cardCa, dividir: true });
-    const r = await asUser(ca, "app_settle", { pessoa_id: br, acao: "dispensar" });
+    const r = await asUser(ca, "app_settle", { pessoa_id: br, acao: "dispensar", mes: mesV });
     expect(r.status).toBe("dispensado");
     expect(r.transferencia).toBe(false);
-    expect((await asUser(ca, "app_debts")).recebo).toEqual([]);
+    expect((await asUser(ca, "app_debts", { mes: mesV })).recebo).toEqual([]);
   });
 });
 
@@ -109,11 +117,15 @@ import { handleMessage } from "../supabase/functions/_shared/assistant.ts";
 const say = (uid: string, content: string) => handleMessage({ user_id: uid, channel: "telegram", type: "text", content, timestamp: "" }, { db });
 
 describe("divisão pela conversa", () => {
-  test("jantar no cartão dividido com a Bruna", async () => {
-    const r = await say(ca, "jantar de 150 no cartão nubank cássio dividido com a bruna");
+  test("jantar no cartão dividido com a Bruna: pergunta como fica a divisão", async () => {
+    const q1 = await say(ca, "jantar de 150 no cartão nubank cássio dividido com a bruna");
+    expect(q1.reply).toContain("Como fica a divisão");
+    expect(q1.reply).toContain("R$ 75,00 para cada");
+    const r = await say(ca, "metade");
     expect(r.reply).toContain("dividido");
-    expect(r.reply).toContain("Bruna: R$ 75,00");
-    expect(r.reply).toContain("acertos do mês");
+    expect(r.reply).toContain("Bruna: R$ 75,00 — a pagar para você");
+    expect(r.reply).toContain("No vencimento da fatura");
+    expect(r.reply).toContain("R$ 75,00 a receber de Bruna");
   });
   test("metade no meu cartão e metade no da Bruna", async () => {
     const r = await say(ca, "comprei 250 no mercado, metade no meu cartão e metade no cartão da bruna");
@@ -123,7 +135,7 @@ describe("divisão pela conversa", () => {
   });
   test("Bruna consulta e acerta por pix", async () => {
     const q1 = await say(br, "quanto devo pro cássio?");
-    expect(q1.reply).toContain("Você deve R$ 75,00");
+    expect(q1.reply).toContain("Você deve R$ 75,00 para Cássio — vence");
     const r = await say(br, "fiz pix pro cássio");
     expect(r.reply).toContain("Confirma?");
     const ok = await say(br, "sim");
@@ -132,7 +144,7 @@ describe("divisão pela conversa", () => {
     expect((await say(br, "acertos")).reply).toContain("Nenhum acerto pendente");
   });
   test("ok dispensa", async () => {
-    await say(ca, "pizza de 60 no cartão nubank cássio rachado com a bruna");
+    await say(ca, "pizza de 60 no cartão nubank cássio rachado meio a meio com a bruna");
     await say(ca, "acertei com a bruna");
     const r = await say(ca, "ok");
     expect(r.reply).toContain("dispensei");
