@@ -28,7 +28,10 @@ const memberLabel = (t) => t.membro_id === null ? "Família" : t.membro_id === m
 /** Seletor "de quem": Todos | cada pessoa | Compartilhado */
 function memberSeg(onChange) {
   if (!family()) return "";
-  const opts = [["", "Todos"], ...state.boot.familia.membros.map((m) => [m.id, m.eu ? "Eu" : m.nome.split(" ")[0]]), ["familia", "Compartilhado"]];
+  // pessoas que não liberaram os gastos individuais não aparecem como filtro (privacidade)
+  const vis = state.boot.familia.membros.filter((m) => m.eu || m.compartilha_gastos);
+  if (state.membro && state.membro !== "familia" && !vis.some((m) => m.id === state.membro)) state.membro = "";
+  const opts = [["", "Todos"], ...vis.map((m) => [m.id, m.eu ? "Eu" : m.nome.split(" ")[0]]), ["familia", "Compartilhado"]];
   setTimeout(() => {
     const el = $("#memberSeg");
     if (el) el.onclick = (e) => { const b = e.target.closest("button"); if (!b) return; state.membro = b.dataset.v; onChange(); };
@@ -1064,11 +1067,17 @@ async function settings(page) {
       <div class="card"><h2>👨‍👩‍👧 Família</h2>
         <div class="list">${fam.membros.map((m) => `
           <div class="item"><div class="emoji">${m.papel === "titular" ? "⭐" : "👤"}</div>
-            <div class="body"><div class="title">${esc(m.nome)}${m.eu ? " (você)" : ""}</div><div class="sub">${m.papel === "titular" ? "Titular" : "Membro"}</div></div>
+            <div class="body"><div class="title">${esc(m.nome)}${m.eu ? " (você)" : ""}</div><div class="sub">${m.papel === "titular" ? "Titular" : "Membro"}${fam.membros.length > 1 && !m.eu ? ` · ${m.compartilha_gastos || m.compartilha_contas ? `mostra ${[m.compartilha_gastos && "gastos", m.compartilha_contas && "contas e cartões"].filter(Boolean).join(" e ")}` : "🔒 gastos e contas privados"}` : ""}</div></div>
             ${fam.titular && !m.eu ? `<button class="btn small danger" data-remove="${m.id}">Remover</button>` : ""}
             ${!fam.titular && m.eu ? `<button class="btn small" data-remove="${m.id}">Sair</button>` : ""}</div>`).join("")}</div>
-        ${fam.titular ? `<p class="small muted">Convide sua esposa (ou outra pessoa): vocês passam a ver e registrar no mesmo controle, com visão da família e de cada um.</p>
+        ${fam.titular ? `<p class="small muted">Convide sua esposa (ou outra pessoa): vocês registram no mesmo controle. O que é da família fica para os dois; os gastos de cada um só aparecem para o outro se a pessoa liberar.</p>
           <div id="inviteArea"></div><button class="btn primary" id="invite">Convidar pessoa</button>` : ""}
+        ${fam.membros.length > 1 ? `<div class="share-box">
+          <h3 class="small" style="margin:14px 0 4px">O que você mostra para a família</h3>
+          <p class="small muted" style="margin:0 0 8px">O que é <b>da Família</b> (compartilhado) e as <b>compras divididas</b> entre vocês aparecem sempre para todos. O resto é seu: só aparece para os outros se você liberar.</p>
+          <label class="check" style="display:flex"><input type="checkbox" id="shGastos" ${fam.membros.find((m) => m.eu)?.compartilha_gastos ? "checked" : ""}> Mostrar meus gastos e receitas individuais</label>
+          <label class="check" style="display:flex"><input type="checkbox" id="shContas" ${fam.membros.find((m) => m.eu)?.compartilha_contas ? "checked" : ""}> Mostrar minhas contas e cartões (saldos, limites e faturas)</label>
+          <p class="small muted" style="margin-top:6px">Liberando os dois, vocês têm o orçamento da família completo, juntos. Dá para desligar quando quiser.</p></div>` : ""}
         ${fam.titular && fam.membros.length === 1 ? `<details style="margin-top:14px"><summary class="small" style="cursor:pointer;font-weight:700">Recebi um convite</summary>
           <form id="joinForm" class="row" style="margin-top:10px"><input class="input" name="codigo" placeholder="Código do convite" maxlength="8" style="text-transform:uppercase;max-width:200px"><button class="btn">Entrar na família</button></form>
           <p class="small muted">Só funciona numa conta nova, ainda sem lançamentos.</p></details>` : ""}
@@ -1142,6 +1151,12 @@ async function settings(page) {
       }
     } catch (ex) { toast(ex.message); }
   };
+  for (const [id, campo] of [["#shGastos", "gastos"], ["#shContas", "contas"]]) {
+    $(id)?.addEventListener("change", async (e) => {
+      try { await api.rpc("app_family_share", { [campo]: e.target.checked }); state.boot = null; toast(e.target.checked ? "Liberado para a família ✅" : "Agora é só seu 🔒"); }
+      catch (y) { e.target.checked = !e.target.checked; toast(y.message); }
+    });
+  }
   $("#invite")?.addEventListener("click", async () => {
     try {
       const r = await api.rpc("app_family_invite");

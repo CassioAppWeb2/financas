@@ -31,6 +31,8 @@ describe("convite e entrada na família", () => {
     expect(inv.codigo).toHaveLength(8);
     const r = await asUser<any>(ana, "app_family_join", { codigo: inv.codigo.toLowerCase() });
     expect(r).toMatchObject({ status: "ok", titular: "Cássio" });
+    // estes testes são de uma família que liberou tudo para os dois (ver privacidade.test.ts)
+    for (const u of [cassio, ana]) await asUser(u, "app_family_share", { gastos: true, contas: true });
     const boot = await asUser<any>(ana, "app_bootstrap");
     expect(boot.familia.titular).toBe(false);
     expect(boot.familia.membros.map((m: any) => m.nome)).toEqual(["Cássio", "Ana"]);

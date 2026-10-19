@@ -309,6 +309,12 @@ async function processQueue(itens: QueueItem[], c: Ctx, chatMessageId: string): 
 async function dispatch(i: Interpretation, c: Ctx): Promise<Outcome> {
   const greet = i.saudacao ? `${i.saudacao}! ${/dia/.test(i.saudacao) ? "☀️ " : ""}` : "";
   let out: Outcome;
+  // privacidade: gastos individuais de outra pessoa só aparecem se ela liberou
+  const alvo = i.membro_id && i.membro_id !== "familia" ? (c.uc.membros ?? []).find((m) => m.id === i.membro_id) : undefined;
+  if (alvo && !alvo.eu && !alvo.compartilha_gastos && /^(QUERY_|FINANCIAL_ANALYSIS)/.test(i.intent)) {
+    const nome = alvo.nome.split(" ")[0];
+    return { intent: i.intent, reply: `🔒 ${nome} não compartilha os gastos individuais com a família — eles só aparecem para ${nome}. O que é da família (compartilhado) e as compras divididas entre vocês aparecem para os dois.\nSe ${nome} quiser liberar: *Configurações → Família → Mostrar meus gastos para a família*.` };
+  }
   switch (i.intent) {
     case "CREATE_EXPENSE": case "CREATE_INCOME": case "CREATE_TRANSFER": case "CREATE_INVESTMENT": case "CREATE_REDEMPTION":
       out = await createFlow(i, c); break;

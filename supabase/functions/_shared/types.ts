@@ -72,7 +72,7 @@ export interface Interpretation {
   model?: string;
 }
 
-export interface Member { id: string; nome: string; eu: boolean; }
+export interface Member { id: string; nome: string; eu: boolean; /** liberou os gastos individuais para a família */ compartilha_gastos?: boolean; }
 
 export interface UserContext {
   hoje: string;

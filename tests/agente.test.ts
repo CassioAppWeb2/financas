@@ -35,6 +35,7 @@ beforeAll(async () => {
   ca = await newUser("Cássio"); br = await newUser("Bruna");
   const inv = await asUser(ca, "app_family_invite");
   await asUser(br, "app_family_join", { codigo: inv.codigo });
+  for (const u of [ca, br]) await asUser(u, "app_family_share", { gastos: true, contas: true });
 });
 
 describe("cadastros conversando", () => {

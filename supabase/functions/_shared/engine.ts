@@ -7,14 +7,15 @@ export class EngineError extends Error {}
 export function postgrestEngine(url: string, serviceKey: string, f: typeof fetch = fetch): EngineDb {
   return {
     async rpc(fn, userId, payload = {}) {
-      const res = await f(`${url}/rest/v1/rpc/${fn}`, {
+      // tudo passa por fe_call, que registra quem está usando (privacidade na família)
+      const res = await f(`${url}/rest/v1/rpc/fe_call`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           apikey: serviceKey,
           authorization: `Bearer ${serviceKey}`,
         },
-        body: JSON.stringify({ p_user: userId, p: payload }),
+        body: JSON.stringify({ p_user: userId, p_fn: fn, p: payload }),
       });
       const text = await res.text();
       const body = text ? JSON.parse(text) : null;

@@ -10,7 +10,7 @@ export function localEngine(sql = new SQL(DB_URL)): EngineDb & { sql: SQL } {
     sql,
     async rpc(fn, userId, payload = {}) {
       if (!/^fe_[a-z_]+$/.test(fn)) throw new Error("função inválida");
-      const rows = await sql.unsafe(`select to_jsonb(public.${fn}($1::uuid, $2::jsonb)) as r`, [userId, payload]);
+      const rows = await sql.unsafe(`select public.fe_call($1::uuid, $2::text, $3::jsonb) as r`, [userId, fn, payload]);
       return rows[0].r;
     },
   };

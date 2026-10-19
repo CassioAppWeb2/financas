@@ -18,6 +18,7 @@ beforeAll(async () => {
   ca = await newUser("Cássio"); br = await newUser("Bruna");
   const inv = await asUser(ca, "app_family_invite");
   await asUser(br, "app_family_join", { codigo: inv.codigo });
+  for (const u of [ca, br]) await asUser(u, "app_family_share", { gastos: true, contas: true });
   cardCa = (await asUser(ca, "app_save_card", { nome: "Nubank Cássio", fechamento: 5, vencimento: 12 })).id;
   contaBr = (await asUser(br, "app_save_account", { nome: "Itaú Bruna", tipo: "corrente", saldo_inicial: 1000 })).id;
   hoje = (await q(`select fe_today($1)::text t`, ca))[0].t;

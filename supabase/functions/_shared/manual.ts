@@ -57,7 +57,7 @@ A conexão pelo WhatsApp ainda está sendo preparada. Por enquanto use o própri
   },
   {
     id: "familia", titulo: "Modo família (convidar e ver por pessoa)",
-    chaves: { familia: 3, convid: 3, esposa: 2, marido: 2, "adicionar pessoa": 3, "entrar na familia": 4, membro: 2, compartilhad: 2, "cada um": 1, "remover pessoa": 3 },
+    chaves: { familia: 3, convid: 3, esposa: 2, marido: 2, privacidade: 4, privad: 3, "liberar": 2, "esconder": 3, "ver os gastos": 3, "adicionar pessoa": 3, "entrar na familia": 4, membro: 2, compartilhad: 2, "cada um": 1, "remover pessoa": 3 },
     texto: `👨‍👩‍👧 *Família*
 *Convidar alguém:*
 1. Quem é o titular vai em *Configurações → Família → Convidar pessoa* e passa o código para a outra pessoa.
@@ -66,6 +66,8 @@ A conexão pelo WhatsApp ainda está sendo preparada. Por enquanto use o própri
 • No início e nos lançamentos há o filtro *Todos / cada pessoa / Compartilhado*: cada um vê só os próprios valores, ou tudo junto.
 • Ao lançar, escolha *De quem é?* (meu, da outra pessoa ou Família). Pelo chat: “gastamos 300 no mercado” vira compartilhado.
 • Contas bancárias e cartões também têm dono (*De quem é a conta/cartão?*).
+*Privacidade (cada um escolhe):* o que é *da Família* e as *compras divididas* aparecem sempre para todos. Os gastos, contas e cartões individuais de cada pessoa só aparecem para os outros se ela liberar em *Configurações → Família → O que você mostra para a família* (gastos e receitas; contas e cartões). Liberando os dois, vocês têm o orçamento familiar completo, juntos.
+• Cada pessoa também dá o nome que quiser ao próprio assistente (*Configurações → Perfil*).
 • O titular pode *Remover* alguém; quem é membro pode *Sair*.`,
   },
   {
