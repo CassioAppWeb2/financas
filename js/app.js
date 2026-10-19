@@ -363,6 +363,13 @@ function bindTxClicks(host, list, after) {
 
 // ---------------------------------------------------------------- formulário de lançamento
 /** Conta sugerida: a padrão, se for da família ou minha; senão a minha primeira conta. */
+/** "Nubank" do outro membro aparece como "Nubank (Bruna)" — e os meus cartões vêm primeiro */
+function cardLabel(k) {
+  if (!family() || !k.membro_id || k.membro_id === meId()) return k.nome;
+  const dono = state.boot.familia.membros.find((m) => m.id === k.membro_id);
+  return dono ? `${k.nome} (${dono.nome.split(" ")[0]})` : k.nome;
+}
+const myCardsFirst = (cards) => [...(cards || [])].sort((a, b) => (b.membro_id === meId()) - (a.membro_id === meId()));
 function defaultAccount(contas) {
   const pad = contas.find((a) => a.padrao && a.status === "ativa");
   if (!family() || !pad || pad.membro_id === null || pad.membro_id === meId()) return pad || contas[0];
@@ -391,7 +398,7 @@ function txForm(t, after, preset = {}) {
         <div class="field"><label>Subcategoria</label><select class="input" name="subcategoria_id"></select></div>
       </div>
       <div class="row">
-        <div class="field"><label class="lbl-conta">Conta</label><select class="input" name="conta_id" ${edit && t.cartao_id ? "disabled" : ""}>${opts([...contas.map((a) => [a.id, a.nome]), ...(edit && !t.cartao_id ? [] : (b.cartoes || []).map((k) => ["k:" + k.id, "💳 " + k.nome]))], t?.cartao_id ? "k:" + t.cartao_id : t?.conta_id || defaultAccount(contas)?.id)}</select></div>
+        <div class="field"><label class="lbl-conta">Conta</label><select class="input" name="conta_id" ${edit && t.cartao_id ? "disabled" : ""}>${opts([...contas.map((a) => [a.id, a.nome]), ...(edit && !t.cartao_id ? [] : myCardsFirst(b.cartoes).map((k) => ["k:" + k.id, "💳 " + cardLabel(k)]))], t?.cartao_id ? "k:" + t.cartao_id : t?.conta_id || defaultAccount(contas)?.id)}</select></div>
         <div class="field dest-row"><label>Conta de destino</label><select class="input" name="conta_destino_id" ${edit ? "disabled" : ""}>${opts(contas.map((a) => [a.id, a.nome]), t?.conta_destino_id || contas.find((a) => !a.padrao)?.id)}</select></div>
         ${edit ? "" : `<div class="field parc-row"><label>Parcelas</label><select class="input" name="parcelas">${Array.from({ length: 48 }, (_, i) => `<option value="${i + 1}">${i ? `${i + 1}x` : "À vista (1x)"}</option>`).join("")}</select></div>`}
       </div>
@@ -1161,7 +1168,7 @@ function more(page) {
 }
 
 // ---------------------------------------------------------------- início
-F2.init({ api, state, loadBoot, modal, toast, confirmBox, esc, brl, dateBR, parseMoney, moneyInput, monthTitle, shiftMonth, monthNav, txItem, bindTxClicks,
+F2.init({ cardLabel, myCardsFirst, api, state, loadBoot, modal, toast, confirmBox, esc, brl, dateBR, parseMoney, moneyInput, monthTitle, shiftMonth, monthNav, txItem, bindTxClicks,
   family, memberSeg, memberLabel, todayISO, MESES, TIPOS, txForm, setRefresh: (fn) => { viewRefresh = fn; } });
 initAvisos({ api, state, toast, esc, dateBR, parseMoney, modal, confirmBox, reload: () => (viewRefresh ? viewRefresh() : router({ silent: true })) });
 api.onAuth((s) => { if (!s) { state.boot = null; document.getElementById("bellBtn")?.classList.add("hidden"); } });
