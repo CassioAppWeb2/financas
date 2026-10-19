@@ -179,4 +179,20 @@ describe("cartões com o mesmo nome", () => {
     expect(rows.length).toBe(2);
     expect(rows.every((r) => r.dono === r.created_by)).toBe(true);
   });
+  test("“no cartão” sem dizer qual: o cartão de quem está lançando (a Bruna tem um só)", async () => {
+    await say(br, "paguei 27 na farmácia no cartão");
+    const [r] = await q(`select (select member_id from credit_cards c where c.id = t.card_id) dono from transactions t
+      where t.user_id = $1 and t.amount_cents = 2700 and t.deleted_at is null`, ca);
+    expect(r.dono).toBe(br);
+  });
+  test("conta com o mesmo nome: vale a de quem lança", async () => {
+    await asUser(ca, "app_save_account", { nome: "Inter", tipo: "corrente", saldo_inicial: 0 });
+    await asUser(br, "app_save_account", { nome: "Inter", tipo: "corrente", saldo_inicial: 0 });
+    await say(br, "gastei 31 na padaria no débito do inter");
+    await say(ca, "gastei 32 na padaria no débito do inter");
+    const rows = await q(`select (select member_id from accounts a where a.id = t.account_id) dono, t.created_by from transactions t
+      where t.user_id = $1 and t.amount_cents in (3100, 3200) and t.deleted_at is null`, ca);
+    expect(rows.length).toBe(2);
+    expect(rows.every((r) => r.dono === r.created_by)).toBe(true);
+  });
 });

@@ -36,7 +36,7 @@ function catSelects(m, f, tipo, catId, subId) {
 function payOptions(withCards, sel) {
   const b = C.state.boot;
   const acc = b.contas.contas.filter((a) => a.status === "ativa").map((a) => [`c:${a.id}`, `🏦 ${a.nome}`]);
-  const cards = withCards ? (b.cartoes || []).map((k) => [`k:${k.id}`, `💳 ${k.nome}`]) : [];
+  const cards = withCards ? C.myCardsFirst(b.cartoes).map((k) => [`k:${k.id}`, `💳 ${C.cardLabel(k)}`]) : [];
   return opts([...acc, ...cards], sel ?? `c:${b.contas.contas.find((a) => a.padrao)?.id}`);
 }
 
@@ -664,7 +664,7 @@ export async function importDialog(pref = {}, after) {
   C.modal(`<h2>Importar extrato</h2>
     <form id="if" novalidate>
       <div class="field"><label>Arquivo do banco (OFX, CSV, PDF ou foto da fatura)</label><input class="input" type="file" name="arq" accept=".ofx,.qfx,.csv,.txt,text/csv,.pdf,application/pdf,image/jpeg,image/png"></div>
-      <div class="field"><label>Os lançamentos são de</label><select class="input" name="destino">${payOptions(true, pref.cartao && b.cartoes?.length ? `k:${b.cartoes[0].id}` : undefined)}</select></div>
+      <div class="field"><label>Os lançamentos são de</label><select class="input" name="destino">${payOptions(true, pref.cartao && b.cartoes?.length ? `k:${C.myCardsFirst(b.cartoes)[0].id}` : undefined)}</select></div>
       <label class="row small" style="margin-bottom:8px"><input type="checkbox" name="inverter"> Inverter sinais (use se as compras aparecerem como entradas)</label>
       <p class="small muted">O mais preciso é o arquivo <b>OFX</b> (no app ou site do banco: Extrato → Exportar). <b>PDF ou foto</b> da fatura também funcionam: a IA lê os lançamentos (pode levar até 1 minuto) e você confere antes. Nada é salvo antes da sua confirmação, e o que já existe não entra de novo.</p>
       <p class="small expense hidden form-err"></p>
@@ -711,7 +711,7 @@ async function readDocument(file, f, m, close, after) {
     const st = await C.api.ask({ acao: "ler_extrato", arquivo_base64: b64, mime });
     const b = C.state.boot;
     let [kind, id] = f.destino.value.split(":");
-    if (st.cartao) { const k = (b.cartoes || []).find((x) => x.nome === st.cartao); if (k) { kind = "k"; id = k.id; } }
+    if (st.cartao) { const k = C.myCardsFirst(b.cartoes).find((x) => x.nome === st.cartao); if (k) { kind = "k"; id = k.id; } }
     else if (st.conta) { const a = b.contas.contas.find((x) => x.nome === st.conta); if (a) { kind = "c"; id = a.id; } }
     if (st.tipo === "fatura_cartao" && kind !== "k") {
       if (!(b.cartoes || []).length) return err(m, "Isso é uma fatura de cartão. Cadastre o cartão em Cartões antes de importar.");
@@ -925,7 +925,7 @@ async function settleDialog(pessoaId, valor, devo, nome, after) {
 export function splitArea(host, payDefault) {
   const b = C.state.boot, membros = b.familia.membros;
   const contas = b.contas.contas.filter((a) => a.status === "ativa");
-  const payOpts = (sel) => opts([...contas.map((a) => [`c:${a.id}`, `🏦 ${a.nome}`]), ...(b.cartoes || []).map((k) => [`k:${k.id}`, `💳 ${k.nome}`])], sel);
+  const payOpts = (sel) => opts([...contas.map((a) => [`c:${a.id}`, `🏦 ${a.nome}`]), ...C.myCardsFirst(b.cartoes).map((k) => [`k:${k.id}`, `💳 ${C.cardLabel(k)}`])], sel);
   host.innerHTML = `<div class="split-box"><div class="small muted" style="margin-bottom:6px">Cada um com a sua parte. Se a parte de alguém for paga com cartão/conta de outra pessoa, vira <b>acerto</b> entre vocês.</div>
     ${membros.map((mm) => `<div class="row split-row" data-m="${mm.id}">
       <span class="split-name">${mm.eu ? "Eu" : C.esc(mm.nome.split(" ")[0])}</span>
