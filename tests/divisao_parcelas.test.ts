@@ -49,6 +49,11 @@ describe("entende a divisão na frase", () => {
     const r = interpretRules("comprei uma mesa de 900 no nubank cássio dividido em partes iguais com a bruna", uc());
     expect([r.dividir, r.divisao_igual, r.partes]).toEqual([true, true, undefined]);
   });
+  test("áudio real: cartão e percentuais ditos depois de “dividido com a Bruna”", () => {
+    const r = interpretRules("Compramos um sofá de 3.500 reais dividido com a Bruna. Comprei com a fatura, comprei com o cartão do Nubank Cássio e a fatura vai ser dividida 60% para mim e 40% para Bruna em 10 vezes.", uc());
+    expect([r.valor, r.parcelas, r.cartao, r.dividir, r.descricao, r.familia]).toEqual([3500, 10, "Nubank Cássio", true, "Sofá", undefined]);
+    expect(r.partes).toEqual([{ membro: "c", percentual: 60 }, { membro: "b", percentual: 40 }]);
+  });
   test("“dividido em 10x” é parcelamento, não divisão", () => {
     const r = interpretRules("comprei uma tv de 2.400 dividido em 10x no nubank cássio", uc());
     expect([r.dividir, r.parcelas, r.valor]).toEqual([undefined, 10, 2400]);
@@ -114,6 +119,19 @@ describe("sofá em 10x no cartão do Cássio, dividido com a Bruna", () => {
     expect(pb.proximos.some((t: any) => t.id === id && t.tipo === "despesa" && t.pessoa === "Cássio")).toBe(true);
     const pc = await asUser(ca, "app_pending", {});
     expect(pc.proximos.some((t: any) => t.id === id && t.tipo === "receita" && t.pessoa === "Bruna")).toBe(true);
+  });
+});
+
+describe("compromissos da Bruna", () => {
+  test("no mês do vencimento, a parte dela entra em “Compromissos futuros”", async () => {
+    const r = await say(ca, "Compramos uma geladeira de 1.000 reais dividido com a Bruna. Comprei no cartão do Nubank Cássio e vai ser dividida 60% para mim e 40% para Bruna em 2 vezes.");
+    expect(r.reply).toContain("• Bruna: R$ 400,00 (2x de R$ 200,00) — a pagar para você");
+    const [{ venc }] = await q(`select min(invoice_due)::text venc from transactions where user_id = $1 and description like 'Geladeira%' and member_id = $2 and amount_cents = 20000`, ca, br);
+    const mes = venc.slice(0, 7);
+    const dash = await asUser(br, "app_dashboard", { mes, membro_id: br });
+    expect(Number(dash.acertos_a_pagar_cents)).toBeGreaterThanOrEqual(20000);
+    const det = await asUser(br, "app_kpi_detail", { mes, membro_id: br, painel: "compromissos" });
+    expect(det.acertos.some((t: any) => /^Geladeira/.test(t.descricao) && t.valor_cents === 20000 && t.data === venc && t.pessoa === "Cássio")).toBe(true);
   });
 });
 

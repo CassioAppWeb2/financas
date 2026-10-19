@@ -161,7 +161,7 @@ export function extractObject(text: string): string | undefined {
   const lower = text.toLowerCase();
   const stop = "(?=\\s+(?:de|por|no|na|nos|nas|em|com|pra|para|pelo|pela|ontem|hoje|anteontem|todo|toda|todos|por|r\\$|\\d|e\\s)|\\s*[.,!?]|\\s*$)";
   const patterns = [
-    new RegExp(`(?:^|\\s)(?:comprei|paguei|assinei|recebi|pedi|renovei)\\s+(?:(?:uma|um|os|as|o|a|meus|minhas|meu|minha)\\s+)?([a-zà-ú][a-zà-ú ]{1,40}?)${stop}`),
+    new RegExp(`(?:^|\\s)(?:comprei|compramos|paguei|pagamos|assinei|assinamos|recebi|pedi|pedimos|renovei)\\s+(?:(?:uma|um|os|as|o|a|meus|minhas|meu|minha)\\s+)?([a-zà-ú][a-zà-ú ]{1,40}?)${stop}`),
     new RegExp(`(?:\\d[\\d.,]*|reais|real|mil|contos?)\\s+(?:de|em|com)\\s+(?:(?:uma|um|o|a)\\s+)?([a-zà-ú][a-zà-ú ]{1,40}?)(?=\\s+(?:no|na|em|ontem|hoje|anteontem|pelo|pela|com|e|todo|toda|todos|por|\\d)\\b|\\s*[.,!?]|\\s*$)`),
   ];
   for (const re of patterns) {
@@ -252,7 +252,7 @@ export const SPLIT_EQUAL = /\b(metade|meio a meio|partes iguais|igualmente|por i
 export function parseShares(text: string, ctx: UserContext): { igual?: boolean; partes?: { membro: string; valor?: number; percentual?: number }[] } {
   const n = norm(text);
   const partes: { membro: string; valor?: number; percentual?: number }[] = [];
-  for (const seg of n.split(/\s+e\s+|;|\s*,\s+(?=\D)|\s+\/\s+/)) {
+  for (const seg of n.split(/\s+e\s+|;|\.\s+|\s*,\s+(?=\D)|\s+\/\s+/)) {
     const membro = memberIn(seg, ctx, true);
     if (!membro || partes.some((x) => x.membro === membro)) continue;
     const pct = seg.match(/(\d{1,3}(?:[.,]\d+)?)\s*(?:%|por ?cento)/);
@@ -292,9 +292,9 @@ export function detectSplit(text: string, ctx: UserContext): { partes?: NonNulla
   const idx = m.index ?? n.length;
   // "dividi com a Amanda": pessoa de fora da família -> não é divisão da família
   const firsts = (ctx.membros ?? []).map((x) => norm(x.nome).split(" ")[0]);
-  for (const w of n.slice(idx).matchAll(/\b(?:com|entre)\s+(?:a |o |as |os )?([a-z]+)/g)) {
-    if (!firsts.includes(w[1]) && !/^(eu|mim|ela|ele|voce|minha|meu|familia|nos|todos|esposa|marido|mulher|ela|dela|dele|a|o)$/.test(w[1])) return null;
-  }
+  // só olha o "com …" logo depois de "dividido" ("dividido com a Bruna"); mais adiante pode ser "comprei com a fatura"
+  const w = n.slice(idx).split(/[.,;!?]/)[0].match(/\b(?:com|entre)\s+(?:a |o |as |os )?([a-z]+)/);
+  if (w && !firsts.includes(w[1]) && !/^(eu|mim|ela|ele|voce|minha|meu|familia|nos|todos|esposa|marido|mulher|ela|dela|dele|a|o)$/.test(w[1])) return null;
   // corta a parte "dividido com a Bruna..." para não confundir estabelecimento/conta
   const cut = n.lastIndexOf(",", idx) > 0 && n.lastIndexOf(",", idx) > idx - 25 ? n.lastIndexOf(",", idx) : idx;
   // quanto fica para cada um (dito depois de "dividido…")
@@ -550,9 +550,12 @@ export function interpretRules(input: string, ctx: UserContext): Interpretation 
         res.valor = t.valor; res.alternativas = t.alternativas;
       }
       const cc = matchCard(split.clean, ctx);
-      res.cartao = cc && (/\b(cartao|credito)\b/.test(norm(split.clean)) || !matchAccount(split.clean, ctx)) ? cc : undefined;
+      // o cartão pode ter sido dito depois de "dividido…" ("… comprei com o cartão do Nubank"): vale se não for só o nome da pessoa
+      const nomes = (ctx.membros ?? []).map((x) => norm(x.nome).split(" ")[0]);
+      const ccDepois = !cc && cartao && norm(cartao).split(" ").some((w) => w.length >= 3 && !nomes.includes(w) && n.includes(w)) ? cartao : undefined;
+      res.cartao = cc && (/\b(cartao|credito)\b/.test(norm(split.clean)) || !matchAccount(split.clean, ctx)) ? cc : ccDepois;
       res.conta = !res.cartao ? matchAccount(split.clean, ctx) : undefined;
-      res.forma_pagamento = paymentMethod(norm(split.clean));
+      res.forma_pagamento = paymentMethod(norm(split.clean)) ?? (res.cartao ? "credito" : undefined);
     }
   }
   if (tipo === "despesa" || tipo === "receita") {

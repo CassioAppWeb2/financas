@@ -279,6 +279,7 @@ async function dashboard(page) {
   const resultado = d.receitas_cents - d.despesas_cents;
   const aPagar = Number(d.acertos_a_pagar_cents || 0), aReceber = Number(d.acertos_a_receber_cents || 0);
   const projetado = Number(d.saldo_contas_cents) + Number(d.receitas_previstas_cents) - Number(d.compromissos_futuros_cents) - aPagar + aReceber;
+  const compromissos = Number(d.compromissos_futuros_cents) + aPagar;   // da pessoa: inclui a parte dela nas compras divididas
   const nome = state.boot.perfil?.nome;
   const mSel = family() && state.membro ? (state.membro === "familia" ? null : state.boot.familia.membros.find((m) => m.id === state.membro)) : undefined;
   const quem = !family() || !state.membro ? "" : state.membro === "familia" ? "da família (conjuntas)" : mSel?.eu ? "suas" : `de ${mSel?.nome?.split(" ")[0] ?? ""}`;
@@ -291,7 +292,7 @@ async function dashboard(page) {
       <button class="card kpi click" data-k="receitas"><div class="label">Receitas</div><div class="value num income">${brl(d.receitas_cents)}</div>${d.receitas_previstas_cents ? `<div class="hint">+ ${brl(d.receitas_previstas_cents)} previstas</div>` : ""}</button>
       <button class="card kpi click" data-k="despesas"><div class="label">Despesas</div><div class="value num expense">${brl(d.despesas_cents)}</div></button>
       <button class="card kpi click" data-k="saldo"><div class="label">Saldo em contas</div><div class="value num">${brl(d.saldo_contas_cents)}</div><div class="hint">${quem ? `contas ${quem}, hoje` : "hoje"}</div></button>
-      <button class="card kpi click" data-k="compromissos"><div class="label">Compromissos futuros</div><div class="value num">${brl(d.compromissos_futuros_cents)}</div><div class="hint">contas a pagar e faturas até o fim do mês</div></button>
+      <button class="card kpi click" data-k="compromissos"><div class="label">Compromissos futuros</div><div class="value num">${brl(compromissos)}</div><div class="hint">${aPagar ? "contas, faturas e compras divididas até o fim do mês" : "contas a pagar e faturas até o fim do mês"}</div></button>
       ${d.faturas_mes_cents ? `<button class="card kpi click" data-k="faturas"><div class="label">Faturas do mês</div><div class="value num">${brl(d.faturas_mes_cents)}</div><div class="hint">${quem ? `cartões ${quem}` : "todos os cartões"}</div></button>` : ""}
       ${aPagar || aReceber ? `<button class="card kpi click" data-k="acertos"><div class="label">Acertos (gastos divididos)</div><div class="value num ${aPagar > aReceber ? "expense" : "income"}">${brl(Math.abs(aPagar - aReceber))}</div><div class="hint">${aPagar > aReceber ? "a pagar" : "a receber"} no mês</div></button>` : ""}
       ${current ? `<button class="card kpi click" data-k="projetado"><div class="label">Saldo projetado</div><div class="value num">${brl(projetado)}</div><div class="hint">estimativa p/ fim do mês</div></button>` : ""}

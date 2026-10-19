@@ -824,14 +824,19 @@ export async function kpiDialog(k, d, extra, after) {
     } else if (k === "compromissos" || k === "faturas") {
       const r = await C.api.rpc("app_kpi_detail", { ...base, painel: k });
       txs = r.lancamentos;
+      const ac = r.acertos || [];
+      const acList = ac.length ? `<h3 class="small" style="margin-top:14px">Sua parte em compras divididas — ${C.brl(sum(ac))}</h3><div class="list">${ac.map((t) => `<div class="item">
+          <div class="emoji">🤝</div><div class="body"><div class="title">${C.esc(t.descricao || "Compra dividida")}</div>
+          <div class="sub">a pagar para ${C.esc(String(t.pessoa || "").split(" ")[0])} · vence ${C.dateBR(t.data)}${t.cartao ? ` (fatura do ${C.esc(t.cartao)})` : ""}</div></div>
+          <div class="amount num expense">${C.brl(t.valor_cents)}</div></div>`).join("")}</div>` : "";
       html = (k === "compromissos" ? `<h3 class="small">Contas a pagar até o fim do mês — ${C.brl(sum(txs))}</h3>${txList(txs, "Nenhuma conta a pagar lançada.")}<h3 class="small" style="margin-top:14px">Faturas de cartão</h3>` : "") +
-        (r.faturas.length ? `<div class="list">${fatList(r.faturas)}</div>` : `<div class="empty">Nenhuma fatura a pagar até o fim do mês.</div>`);
+        (r.faturas.length ? `<div class="list">${fatList(r.faturas)}</div>` : `<div class="empty">Nenhuma fatura a pagar até o fim do mês.</div>`) + (k === "compromissos" ? acList : "");
     } else if (k === "acertos") {
       html = `<div id="kdDebts"></div>`;
     } else if (k === "projetado") {
       html = `<div class="card">${row("Saldo em contas hoje", Number(d.saldo_contas_cents))}${row("+ Receitas previstas", Number(d.receitas_previstas_cents), "income")}
         ${row("− Compromissos (contas e faturas)", Number(d.compromissos_futuros_cents), "expense")}
-        ${extra.aPagar ? row("− Acertos a pagar", extra.aPagar, "expense") : ""}${extra.aReceber ? row("+ Acertos a receber", extra.aReceber, "income") : ""}
+        ${extra.aPagar ? row("− Sua parte em compras divididas", extra.aPagar, "expense") : ""}${extra.aReceber ? row("+ Acertos a receber", extra.aReceber, "income") : ""}
         <hr style="border:0;border-top:1px solid var(--line)">${row("= Saldo projetado", extra.projetado)}</div>
         <p class="small muted">Estimativa feita só com o que está lançado no app. Toque nos outros painéis para ver cada parte.</p>`;
     }
