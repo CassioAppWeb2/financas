@@ -168,3 +168,15 @@ describe("outras formas de dizer", () => {
     expect(r.reply).toContain("• Bruna: R$ 750,00");
   });
 });
+
+describe("cartões com o mesmo nome", () => {
+  test("cada um que fala “Nubank” usa o próprio Nubank", async () => {
+    await asUser(br, "app_save_card", { nome: "Nubank Cássio", fechamento: 3, vencimento: 10 });   // mesmo nome, da Bruna
+    await say(br, "gastei 33 no mercado no nubank cássio");
+    await say(ca, "gastei 44 no mercado no nubank cássio");
+    const rows = await q(`select (select member_id from credit_cards c where c.id = t.card_id) dono, t.created_by from transactions t
+      where t.user_id = $1 and t.amount_cents in (3300, 4400) and t.deleted_at is null`, ca);
+    expect(rows.length).toBe(2);
+    expect(rows.every((r) => r.dono === r.created_by)).toBe(true);
+  });
+});
