@@ -684,7 +684,7 @@ async function chat(page) {
     <div class="chips" id="chips">${SUGGESTIONS.map((s) => `<button>${esc(s)}</button>`).join("")}</div>
     <form class="composer" id="composer">
       <button type="button" class="round mic" id="cam" aria-label="Foto de cupom ou nota fiscal" title="Foto de cupom ou nota fiscal">${icon("camera", 21)}</button>
-      <input type="file" id="camFile" accept="image/*,application/pdf" hidden>
+      <input type="file" id="camFile" accept="image/*,application/pdf,.ofx,.qfx,.csv,text/csv" hidden>
       <button type="button" class="round mic" id="mic" aria-label="Gravar áudio" title="Gravar áudio">${icon("mic", 21)}</button>
       <textarea class="input" id="txt" rows="1" placeholder="${state.boot.perfil?.assistente ? `Fale com ${esc(state.boot.perfil.assistente)}…` : "Escreva ou fale…"}" maxlength="2000"></textarea>
       <button class="round send" id="sendBtn" aria-label="Enviar">${icon("send", 20)}</button>
@@ -754,6 +754,8 @@ async function chat(page) {
   $("#camFile").onchange = async (e) => {
     const file = e.target.files?.[0]; e.target.value = "";
     if (!file) return;
+    // arquivo do banco (OFX/CSV): abre a importação com prévia
+    if (/\.(ofx|qfx|csv|txt)$/i.test(file.name) || /csv|ofx/i.test(file.type)) { F2.importDialog({ arquivo: file }, () => router({ silent: true })); return; }
     try {
       const { b64, mime } = await shrinkImage(file);
       send("", "foto", { foto_base64: b64, mime, label: `📷 ${mime === "application/pdf" ? "Documento" : "Foto do cupom"} — lendo…` });

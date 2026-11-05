@@ -6,7 +6,9 @@
 
 import type { AssistantReply, Card, EngineDb, IncomingMessage, Interpretation, UserContext } from "./types.ts";
 import { runAgent, confirmAgent, type AgentCall, type GeminiContent } from "./agent.ts";
-import { interpret, interpretWithAI, extractStatement, StatementError, type AiConfig, type Statement, type Turn } from "./ai.ts";
+import { interpret, interpretWithAI, extractStatement, StatementError, categorizeItems, type AiConfig, type Statement, type Turn } from "./ai.ts";
+// @ts-ignore módulo JS compartilhado com a tela do app
+import { parseExtrato, guessDestino } from "../../../web/js/extrato.js";
 import { interpretRules, matchUserCategory, matchCard, matchGoal, parseShares } from "./interpreter_rules.ts";
 import { guessCategory } from "./categorizer.ts";
 import { extractAmount, findAmounts } from "./money.ts";
@@ -1321,9 +1323,9 @@ function statementItems(st: Statement) {
     const g = guessCategory(it.descricao, despesa ? "despesa" : "receita");
     const useRule = g && (g.confianca >= 0.8 || !it.categoria);
     return {
-      data: it.data, valor: it.valor, descricao: it.descricao, parcela: it.parcela,
-      categoria: useRule ? g!.categoria : despesa ? it.categoria : undefined,
-      subcategoria: useRule ? g!.subcategoria : undefined,
+      data: it.data, valor: it.valor, descricao: it.descricao, parcela: it.parcela, id_externo: it.id_externo,
+      categoria: useRule ? g!.categoria : it.categoria,
+      subcategoria: useRule ? g!.subcategoria : it.subcategoria,
     };
   });
 }
@@ -1340,8 +1342,38 @@ export async function readStatement(bytes: Uint8Array, mime: string, user: strin
   return { tipo: st.tipo, banco: st.banco, final_cartao: st.final_cartao, vencimento: st.vencimento, total: st.total, cartao, conta, itens: statementItems(st) };
 }
 
+/** Arquivo OFX/CSV do banco: lê aqui mesmo (sem IA), e a IA só sugere categorias para o que as regras não reconhecem. */
+async function bankFileStatement(d: NonNullable<IncomingMessage["document"]>, c: Ctx): Promise<Statement> {
+  let text = new TextDecoder("utf-8").decode(d.bytes);
+  if (text.includes("\uFFFD")) text = new TextDecoder("windows-1252").decode(d.bytes);
+  const p = parseExtrato(text);
+  const itens = (p.itens as any[]).filter((x) => x.data && Number.isFinite(x.valor) && x.valor !== 0).map((x) => ({
+    data: x.data, descricao: x.descricao, id_externo: x.id_externo || undefined,
+    // fatura em OFX: as compras vêm negativas; o motor espera compras positivas na fatura
+    valor: p.cartao && p.ofx ? -x.valor : x.valor,
+  }));
+  const st: Statement = { tipo: p.cartao ? "fatura_cartao" : "extrato_conta", banco: p.banco || undefined, final_cartao: p.final || undefined, itens } as Statement;
+  // destino pelo banco do arquivo
+  const dest = guessDestino(p.banco, c.uc.contas.map((n) => ({ id: n, nome: n })), (c.uc.cartoes ?? []).map((n) => ({ id: n, nome: n })), p.cartao, p.final);
+  if (dest) { if (p.cartao) (st as any).cartao = dest.nome; else st.banco = dest.nome; }
+  // categorias: a IA ajuda só onde as regras não sabem
+  const semRegra = st.itens.map((it, k) => ({ it, k })).filter(({ it }) => !guessCategory(it.descricao, (st.tipo === "fatura_cartao" ? it.valor > 0 : it.valor < 0) ? "despesa" : "receita"));
+  if (semRegra.length && (c.deps.ai?.geminiKey || c.deps.ai?.groqKey)) {
+    const sug = await categorizeItems(semRegra.map(({ it, k }) => ({ linha: k + 1, descricao: it.descricao, tipo: (st.tipo === "fatura_cartao" ? it.valor > 0 : it.valor < 0) ? "despesa" : "receita" })), c.uc, c.deps.ai!).catch(() => []);
+    for (const x of sug) { const it = st.itens[x.linha - 1]; if (it) { it.categoria = x.categoria; it.subcategoria = x.subcategoria; } }
+  }
+  return st;
+}
+
 async function documentFlow(c: Ctx): Promise<Outcome> {
   const d = c.msg.document!;
+  if (/^text\/(ofx|csv)$/.test(d.mime) || /\.(ofx|qfx|csv)$/i.test(d.name ?? "")) {
+    let st: Statement;
+    try { st = await bankFileStatement(d, c); }
+    catch (e) { return { reply: `Não consegui ler esse arquivo (${(e as Error).message}). Confira se é o OFX ou CSV exportado pelo banco.`, pending: null }; }
+    if (!st.itens.length) return { reply: "Não encontrei lançamentos nesse arquivo. 🤔 Confira se é o extrato exportado pelo banco (OFX ou CSV).", pending: null };
+    return statementDest(st, c);
+  }
   const extract = c.deps.extract ?? ((b: Uint8Array, m: string, uc: UserContext) => extractStatement(b, m, uc, c.deps.ai ?? {}));
   let st: Statement;
   try {
@@ -1355,6 +1387,11 @@ async function documentFlow(c: Ctx): Promise<Outcome> {
     return { reply: "Não consegui ler esse documento. 😕 Confira se é a fatura ou o extrato (PDF ou foto nítida) e tente de novo. Se preferir, baixe o arquivo *OFX* ou *CSV* no app do banco e importe em *Cartões → Importar fatura*.", pending: null };
   }
   if (st.tipo === "cupom_fiscal") return receiptFlow(st, c);
+  return statementDest(st, c);
+}
+
+/** De qual cartão/conta é a fatura/extrato: reconhece pelo banco; se não der, pergunta. */
+async function statementDest(st: Statement, c: Ctx): Promise<Outcome> {
   if (st.tipo === "fatura_cartao") {
     const cards = c.uc.cartoes ?? [];
     if (!cards.length) {
@@ -1370,7 +1407,7 @@ async function documentFlow(c: Ctx): Promise<Outcome> {
     return importPreview(st, { cartao: card }, c);
   }
   const contas = c.uc.contas;
-  const conta = st.banco ? contas.find((a) => norm(a).includes(norm(st.banco!)) || norm(st.banco!).includes(norm(a))) : undefined;
+  const conta = st.banco ? contas.find((a) => norm(a) === norm(st.banco!)) ?? contas.find((a) => norm(a).includes(norm(st.banco!)) || norm(st.banco!).includes(norm(a))) : undefined;
   if (!conta) {
     return { reply: `📄 Li um extrato${st.banco ? ` do ${st.banco}` : ""} com ${st.itens.length} lançamentos. De qual conta ele é? ${contas.join(" · ")}`,
       pending: { kind: "import_dest", st, options: contas, campo: "conta" } };
@@ -1415,7 +1452,11 @@ async function importPreview(st: Statement, dest: ImportDest, c: Ctx): Promise<O
   }
   if (dups.length) reply += `\n🔁 ${dups.length} já estavam lançados e não entram de novo.`;
   if (pags.length) reply += `\n💳 ${pags.length} pagamento(s) de fatura ignorado(s).`;
-  if (!novas.length) return { reply: `${reply}\n\nNão há nada novo para lançar. 👍`, pending: null };
+  const quita = r.itens.filter((x: any) => x.situacao === "quita_pendente");
+  const pfat = r.itens.filter((x: any) => x.situacao === "pagamento_fatura");
+  if (quita.length) reply += `\n✅ ${quita.length} conta(s) que estavam *a pagar/receber* aparecem no extrato — vou marcar como pagas: ${quita.slice(0, 5).map((x: any) => x.pendente?.descricao ?? x.descricao).join(", ")}${quita.length > 5 ? "…" : ""}.`;
+  if (pfat.length) reply += `\n💳 ${pfat.length} pagamento(s) de fatura (${[...new Set(pfat.map((x: any) => x.cartao))].join(", ")}) — registro como pagamento do cartão, não como gasto.`;
+  if (!novas.length && !quita.length && !pfat.length) return { reply: `${reply}\n\nNão há nada novo para lançar. 👍`, pending: null };
   const porCat = new Map<string, { icone: string; total: number; n: number }>();
   for (const x of novas.filter((y: any) => y.tipo === "despesa")) {
     const k = porCat.get(x.categoria) ?? { icone: x.icone ?? "•", total: 0, n: 0 };
@@ -1433,6 +1474,8 @@ async function importPreview(st: Statement, dest: ImportDest, c: Ctx): Promise<O
 async function importConfirm(st: Statement, dest: ImportDest, c: Ctx): Promise<Outcome> {
   const r = await c.deps.db.rpc<any>("fe_import", c.user, { ...dest, vencimento: dest.cartao ? st.vencimento : undefined, itens: statementItems(st), confirmar: true, origem: "importacao" });
   let reply = `✅ Pronto! Lancei ${r.importados} lançamento(s) ${dest.cartao ? `na fatura do ${r.cartao}` : `na conta ${r.conta}`}.`;
+  if (r.quitados) reply += `\n✅ ${r.quitados} conta(s) marcada(s) como paga(s).`;
+  if (r.faturas_pagas) reply += `\n💳 ${r.faturas_pagas} pagamento(s) de fatura registrado(s).`;
   if (r.fatura) reply += `\nTotal dessa fatura no app: *${brl(r.fatura.total_cents)}*${r.fatura.restante_cents > 0 ? `, vence ${dateBR(r.fatura.vencimento)}` : ""}.`;
   reply += `\nSe alguma categoria ficou errada, corrija em *Lançamentos* no app — eu aprendo e acerto nas próximas faturas.`;
   return { reply, pending: null };

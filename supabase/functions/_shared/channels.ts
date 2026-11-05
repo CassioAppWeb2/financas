@@ -3,7 +3,7 @@
 
 import type { EngineDb, IncomingMessage } from "./types.ts";
 import { handleMessage, readStatement, type AssistantDeps } from "./assistant.ts";
-import { transcribeAudio, StatementError, type AiConfig } from "./ai.ts";
+import { transcribeAudio, StatementError, categorizeItems, type AiConfig } from "./ai.ts";
 import type { AudioStore } from "./storage.ts";
 import { ensureMarket } from "./mercado.ts";
 import { ensureVapid } from "./webpush.ts";
@@ -71,6 +71,16 @@ export function createAppHandler(deps: AppDeps) {
         const m = (e as Error).message;
         return json({ error: e instanceof ReportError || /detalhe|muitos relatos/i.test(m) ? m : `Não consegui enviar o relato (${m}).` }, e instanceof ReportError ? 400 : 500);
       }
+    }
+
+    // Importar extrato (OFX/CSV): a IA sugere categorias para o que as regras não reconheceram
+    if (body?.acao === "categorizar") {
+      const itens = (Array.isArray(body.itens) ? body.itens : []).slice(0, 2000)
+        .filter((x: any) => Number.isInteger(x?.linha) && typeof x?.descricao === "string" && (x?.tipo === "despesa" || x?.tipo === "receita"));
+      try {
+        const uc = await deps.db.rpc<any>("fe_context", userId, {});
+        return json({ itens: await categorizeItems(itens, uc, deps.ai ?? {}) });
+      } catch (e) { return json({ itens: [], aviso: (e as Error).message }); }
     }
 
     // Tela "Mercado": indicadores do Banco Central (busca de novo se estiverem velhos ou se pedirem)
@@ -390,17 +400,18 @@ export function createTelegramHandler(deps: TelegramDeps) {
     if (m.doc_id) {
       const mime = (m.doc_mime ?? "").toLowerCase();
       const pdf = mime === "application/pdf" || /\.pdf$/i.test(m.doc_name ?? "");
-      if (!pdf && !/^image\/(jpeg|png|webp)$/.test(mime)) {
-        await send(m.chat_id, "Por enquanto leio faturas e extratos em *PDF* ou *foto*. Para outros arquivos (OFX/CSV), use *Cartões → Importar fatura* no app.");
+      const banco = /\.(ofx|qfx)$/i.test(m.doc_name ?? "") ? "text/ofx" : /\.csv$/i.test(m.doc_name ?? "") || mime === "text/csv" ? "text/csv" : null;
+      if (!pdf && !banco && !/^image\/(jpeg|png|webp)$/.test(mime)) {
+        await send(m.chat_id, "Leio faturas e extratos em *PDF*, *foto*, *OFX* ou *CSV* (exportados pelo app do banco). Esse tipo de arquivo eu não consigo abrir.");
         return;
       }
       if ((m.doc_size ?? 0) > 15_000_000) { await send(m.chat_id, "Esse arquivo é grande demais (máximo 15 MB)."); return; }
-      await send(m.chat_id, "📄 Recebi! Estou lendo os lançamentos… isso pode levar até 1 minuto.");
+      await send(m.chat_id, banco ? "📄 Recebi o extrato! Analisando os lançamentos…" : "📄 Recebi! Estou lendo os lançamentos… isso pode levar até 1 minuto.");
       let bytes: Uint8Array;
       try { bytes = await download(m.doc_id); } catch { await send(m.chat_id, "Não consegui baixar o arquivo do Telegram. Pode mandar de novo?"); return; }
       const reply = await handleMessage(
         { user_id, channel: "telegram", type: "text", content: `📄 ${m.doc_name ?? "documento"}${text ? ` — ${text}` : ""}`, timestamp: new Date().toISOString(),
-          media_ref: m.doc_id, document: { bytes, mime: pdf ? "application/pdf" : mime, name: m.doc_name } },
+          media_ref: m.doc_id, document: { bytes, mime: pdf ? "application/pdf" : banco ?? mime, name: m.doc_name } },
         { db: deps.db, ai: deps.ai },
       );
       await send(m.chat_id, reply.reply);

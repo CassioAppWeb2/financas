@@ -315,6 +315,60 @@ export async function interpret(text: string, ctx: UserContext, cfg: AiConfig = 
 }
 
 // ---------------------------------------------------------------------------
+// Categorias para lançamentos de extrato (OFX/CSV) que as regras não reconheceram
+// ---------------------------------------------------------------------------
+export interface ItemParaCategorizar { linha: number; descricao: string; tipo: "despesa" | "receita" }
+export interface CategoriaSugerida { linha: number; categoria: string; subcategoria?: string }
+
+export async function categorizeItems(itens: ItemParaCategorizar[], ctx: UserContext, cfg: AiConfig): Promise<CategoriaSugerida[]> {
+  if (!itens.length || (!cfg.geminiKey && !cfg.groqKey)) return [];
+  const cats = ctx.categorias.map((c) => `${c.tipo}: ${c.nome}${c.subcategorias.length ? ` (${c.subcategorias.join(", ")})` : ""}`).join("\n");
+  const system = `Você classifica lançamentos de extrato bancário brasileiro nas categorias do usuário.
+As descrições vêm como o banco escreve (ex.: "COMPRA CARTAO DEB MC 03/11 ZAFFARI", "PIX ENVIADO JOAO SILVA", "PAG BOLETO CEEE").
+Para cada item, escolha EXATAMENTE uma categoria da lista do mesmo tipo (despesa ou receita) e, se fizer sentido, uma subcategoria dela.
+Se não der para saber (ex.: um Pix para uma pessoa), use a categoria de "outros" do tipo.
+Responda SOMENTE com JSON: {"itens":[{"linha":n,"categoria":"...","subcategoria":"..."}]}
+Categorias do usuário:
+${cats}`;
+  const out: CategoriaSugerida[] = [];
+  for (let k = 0; k < itens.length; k += 120) {
+    const lote = itens.slice(k, k + 120);
+    const pergunta = JSON.stringify(lote.map((x) => ({ linha: x.linha, tipo: x.tipo, descricao: x.descricao.slice(0, 120) })));
+    let raw: any = null;
+    if (cfg.geminiKey) {
+      try {
+        const { data } = await geminiCall(cfg, {
+          systemInstruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts: [{ text: pergunta }] }],
+          generationConfig: { responseMimeType: "application/json", temperature: 0 },
+        }, 25000);
+        raw = JSON.parse(textOf(data) || "null");
+      } catch (e) { console.warn("categorizar (Gemini):", (e as Error).message); }
+    }
+    if (!raw && cfg.groqKey) {
+      try {
+        const f = cfg.fetch ?? fetch;
+        const r = await f("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST", headers: { authorization: `Bearer ${cfg.groqKey}`, "content-type": "application/json" },
+          body: JSON.stringify({ model: GROQ_MODEL, temperature: 0, response_format: { type: "json_object" },
+            messages: [{ role: "system", content: system }, { role: "user", content: pergunta }] }),
+          signal: AbortSignal.timeout(25000),
+        });
+        if (r.ok) raw = JSON.parse((await r.json())?.choices?.[0]?.message?.content ?? "null");
+      } catch (e) { console.warn("categorizar (Groq):", (e as Error).message); }
+    }
+    for (const x of Array.isArray(raw?.itens) ? raw.itens : []) {
+      const item = lote.find((y) => y.linha === Number(x?.linha));
+      if (!item) continue;
+      const cat = ctx.categorias.find((c) => c.tipo === item.tipo && norm(c.nome) === norm(String(x?.categoria ?? "")));
+      if (!cat) continue;
+      const sub = cat.subcategorias.find((s2) => norm(s2) === norm(String(x?.subcategoria ?? "")));
+      out.push({ linha: item.linha, categoria: cat.nome, ...(sub ? { subcategoria: sub } : {}) });
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Transcrição de áudio (Speech-to-Text) — fornecedor substituível
 // ---------------------------------------------------------------------------
 export interface Transcription { text: string; provider: string; }
@@ -369,7 +423,7 @@ export async function transcribeAudio(bytes: Uint8Array, mime: string, cfg: AiCo
 // Leitura de fatura / extrato em PDF ou foto (Gemini)
 // A IA só LÊ o documento; nada é lançado sem a confirmação da pessoa.
 // ---------------------------------------------------------------------------
-export interface StatementItem { data: string; descricao: string; valor: number; parcela?: string; categoria?: string; }
+export interface StatementItem { data: string; descricao: string; valor: number; parcela?: string; categoria?: string; subcategoria?: string; id_externo?: string; }
 export interface Statement {
   tipo: "fatura_cartao" | "extrato_conta" | "cupom_fiscal";
   /** cupom/nota fiscal: loja, data da compra, forma de pagamento e categoria sugerida */
