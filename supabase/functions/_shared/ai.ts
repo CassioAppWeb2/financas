@@ -59,42 +59,78 @@ export async function geminiCall(cfg: AiConfig, body: unknown, timeoutMs: number
   }
 }
 
-function buildPrompt(ctx: UserContext): string {
+// ---------------------------------------------------------------------------
+// INTERPRETAÇÃO COM IA
+// A IA lê a mensagem com o contexto da pessoa (categorias, contas, cartões, família), as últimas
+// mensagens da conversa e o lançamento que está em andamento. Ela devolve um JSON; tudo é
+// conferido aqui (valores precisam estar na mensagem, nomes precisam existir) e só o Motor grava.
+// ---------------------------------------------------------------------------
+export interface Turn { papel: "user" | "assistant"; texto: string }
+/** lançamento em andamento (ainda NÃO registrado) e a pergunta que o assistente fez */
+export interface PendingCtx { lancamento: Interpretation; pergunta: string }
+export type AiAction = "nova_mensagem" | "responder_pendente" | "cancelar_pendente" | "status_pendente";
+
+function buildPrompt(ctx: UserContext, pend?: PendingCtx): string {
   const cats = ctx.categorias.map((c) => `${c.tipo}: ${c.nome}${c.subcategorias.length ? ` (${c.subcategorias.join(", ")})` : ""}`).join("\n");
-  return `Você interpreta mensagens de um app de finanças pessoais no Brasil. Hoje é ${ctx.hoje} (fuso America/Sao_Paulo).
-Responda SOMENTE com um objeto JSON com estes campos (omita os que não se aplicam):
-{"intent": um de [${INTENTS.join(", ")}],
+  const membros = (ctx.membros ?? []);
+  const eu = membros.find((m) => m.eu)?.nome ?? ctx.nome ?? "a pessoa";
+  const outros = membros.filter((m) => !m.eu).map((m) => m.nome);
+  const resumoPend = pend ? JSON.stringify(Object.fromEntries(Object.entries(pend.lancamento).filter(([k, v]) =>
+    v !== undefined && !["confidence", "provider", "model", "alternativas", "categoria_confianca", "data_explicita"].includes(k)))) : "";
+  return `Você é o cérebro de um assistente de finanças pessoais no Brasil. Hoje é ${ctx.hoje} (fuso America/Sao_Paulo).
+Quem está falando: ${eu}.${outros.length ? ` Família no app: ${eu} (quem fala) e ${outros.join(", ")}.` : ""}
+Leia a ÚLTIMA mensagem do usuário (as anteriores são só contexto) e responda SOMENTE com um objeto JSON:
+{"acao": "nova_mensagem" | "responder_pendente" | "cancelar_pendente" | "status_pendente",
+ "intent": um de [${INTENTS.join(", ")}],
  "tipo": "despesa"|"receita"|"transferencia"|"investimento"|"resgate",
- "valor": número em reais (R$ 1.500,00 = 1500; "1,5 mil" = 1500),
- "data": "AAAA-MM-DD" (resolva "ontem", "dia 10" etc.; omita se não foi dita),
- "descricao": texto curto, "estabelecimento": nome do local se citado,
- "categoria": EXATAMENTE um nome da lista abaixo, "subcategoria": idem,
- "conta": nome de conta da lista, "conta_destino": idem, "parcelas": inteiro,
- "recorrente": booleano, "frequencia": "mensal"|"semanal"|"anual", "dia": dia do mês da recorrência, "dia_util": n-ésimo dia útil,
- "cartao": nome de cartão da lista (compras no crédito, faturas), "meta": nome de meta da lista (ou nome novo em CREATE_GOAL), "prazo": "AAAA-MM-DD" (metas),
+ "valor": número em reais do TOTAL (R$ 1.500,00 = 1500; "1,5 mil" = 1500; "total de 508" = 508),
+ "parcelas": inteiro (compra parcelada: "em 4x", "quatro parcelas", "dividido em 10 vezes"),
+ "data": "AAAA-MM-DD" (só se a data foi dita: "ontem", "dia 10"),
+ "descricao": o que foi comprado/recebido, curto, com inicial maiúscula (ex.: "Camisetas", "Sofá"),
+ "estabelecimento": nome da loja/empresa se citado (ex.: "Minimal Club"),
+ "categoria": EXATAMENTE um nome da lista, "subcategoria": idem (escolha a mais adequada ao que foi comprado: camisetas -> Vestuário),
+ "conta": nome de conta da lista, "conta_destino": idem, "cartao": nome de cartão da lista (compra no crédito),
+ "forma_pagamento": "credito"|"debito"|"pix"|"dinheiro"|"boleto",
+ "de_quem": "eu" | "familia" | nome de outra pessoa da família (de quem é o gasto; "compramos/nosso/da casa" = familia; "só meu/sozinho" = eu),
+ "dividir": true/false (compra dividida ENTRE PESSOAS da família; "dividido em 4 parcelas" NÃO é dividir, é parcelas; "não é dividido", "só meu", "sozinho" = false),
+ "divisao_igual": true se for meio a meio / metade / partes iguais,
+ "partes": [{"pessoa": "eu" ou nome, "valor": reais, "percentual": número}] (só o que foi dito),
+ "membro": "eu" | "familia" | nome (em CONSULTAS: de quem são os gastos perguntados; "quanto gastei" = eu; "quanto gastamos/a família gastou" = familia),
+ "recorrente": booleano, "frequencia": "mensal"|"semanal"|"anual", "dia": dia do mês, "dia_util": n-ésimo dia útil,
+ "meta": nome de meta, "prazo": "AAAA-MM-DD",
  "consulta": "total"|"maior"|"parcelas"|"saldo"|"disponivel"|"resumo"|"comparar"|"gastando_demais"|"posso_comprar"|"fatura"|"limite"|"cartoes",
  "periodo": {"inicio":"AAAA-MM-DD","fim":"AAAA-MM-DD","label":"texto curto"},
  "campo_correcao": "categoria"|"valor"|"data"|"descricao"|"conta",
  "confidence": 0 a 1}
-Regras: NUNCA invente valores, datas ou categorias que não estejam na mensagem ou na lista. Se o valor não foi dito, omita "valor".
-Se a categoria não for clara, omita "categoria". Perguntas sobre gastos/saldo/finanças são consultas (QUERY_* ou FINANCIAL_ANALYSIS).
+${pend ? `HÁ UM LANÇAMENTO EM ANDAMENTO (ainda NÃO foi registrado): ${resumoPend}
+A última pergunta do assistente foi: "${pend.pergunta.slice(0, 400)}"
+- Se a mensagem responde, completa ou CORRIGE esse lançamento (ex.: dá a categoria, diz que não é dividido, troca o cartão, muda o valor): acao="responder_pendente" e devolva TODOS os campos do lançamento já corrigidos.
+- Se pede para desistir dele: acao="cancelar_pendente". Se pergunta se já foi feito/lançado: acao="status_pendente".
+- Se é um assunto novo, sem relação: acao="nova_mensagem".` : `Não há lançamento em andamento: use acao="nova_mensagem".`}
+Regras: NUNCA invente valores, datas, contas ou cartões que não estejam na mensagem (ou no lançamento em andamento). Se o valor não foi dito, omita "valor".
+Use as mensagens anteriores só para entender referências ("o mesmo", "aquele", "foi no Nubank").
+Perguntas sobre gastos/saldo/finanças são consultas (QUERY_* ou FINANCIAL_ANALYSIS). Cadastros/alterações de cartão, conta ou categoria = ADMIN.
+PAY_INVOICE = pagou a fatura do cartão; GOAL_CONTRIBUTE = guardou/tirou dinheiro de uma meta; CANCEL_RECURRING = parou de pagar uma conta fixa; QUERY_RECURRING = listar contas fixas; QUERY_ALERTS = avisos; QUERY_DEBTS = quem deve para quem; SETTLE_DEBT = acertou com alguém da família.
 Categorias do usuário:
 ${cats}
-Contas: ${ctx.contas.join(", ")}
+Contas: ${ctx.contas.join(", ") || "nenhuma"}
 Cartões de crédito: ${(ctx.cartoes ?? []).join(", ") || "nenhum"}
-Metas: ${(ctx.metas ?? []).join(", ") || "nenhuma"}
-PAY_INVOICE = pagou a fatura do cartão; GOAL_CONTRIBUTE = guardou/tirou dinheiro de uma meta; CANCEL_RECURRING = parou de pagar uma conta fixa (descricao = nome dela); QUERY_RECURRING = listar contas fixas; QUERY_ALERTS = avisos/alertas.`;
+Metas: ${(ctx.metas ?? []).join(", ") || "nenhuma"}`;
 }
 
 /** Garante que o JSON da IA só contém valores válidos e que existem no cadastro do usuário. */
-export function sanitize(raw: any, text: string, ctx: UserContext): Interpretation | null {
+export function sanitize(raw: any, text: string, ctx: UserContext, pend?: PendingCtx): (Interpretation & { acao?: AiAction }) | null {
   if (!raw || typeof raw !== "object") return null;
-  const out: Interpretation = { intent: INTENTS.includes(raw.intent) ? raw.intent : "OTHER", confidence: 0.5 };
+  const out: Interpretation & { acao?: AiAction } = { intent: INTENTS.includes(raw.intent) ? raw.intent : "OTHER", confidence: 0.5 };
+  if (["nova_mensagem", "responder_pendente", "cancelar_pendente", "status_pendente"].includes(raw.acao)) out.acao = raw.acao;
+  if (!pend) out.acao = "nova_mensagem";
   const tipos = ["despesa", "receita", "transferencia", "investimento", "resgate"];
   if (tipos.includes(raw.tipo)) out.tipo = raw.tipo;
   const v = Number(raw.valor);
-  // só aceita valor se a mensagem realmente menciona um número
-  if (Number.isFinite(v) && v > 0 && v < 1e9 && findAmounts(text).some((c) => c.role === "valor")) out.valor = Math.round(v * 100) / 100;
+  // só aceita valor que está na mensagem (ou que já estava no lançamento em andamento)
+  const ditos = findAmounts(text).filter((c) => c.role === "valor").map((c) => c.value);
+  const okValor = (x: number) => ditos.some((d) => Math.abs(d - x) < 0.005) || (pend?.lancamento.valor !== undefined && Math.abs(pend.lancamento.valor - x) < 0.005);
+  if (Number.isFinite(v) && v > 0 && v < 1e9 && okValor(v)) out.valor = Math.round(v * 100) / 100;
   const isDate = (s: unknown) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
   if (isDate(raw.data)) { out.data = raw.data; out.data_explicita = true; }
   for (const k of ["descricao", "estabelecimento"] as const) {
@@ -106,7 +142,7 @@ export function sanitize(raw: any, text: string, ctx: UserContext): Interpretati
     out.categoria = cat.nome;
     const sub = cat.subcategorias.find((s) => norm(s) === norm(String(raw.subcategoria ?? "")));
     if (sub) out.subcategoria = sub;
-    out.categoria_confianca = 0.85;
+    out.categoria_confianca = 0.9;
   }
   const acc = (s: unknown) => ctx.contas.find((c) => norm(c) === norm(String(s ?? "")));
   out.conta = acc(raw.conta); out.conta_destino = acc(raw.conta_destino);
@@ -119,62 +155,161 @@ export function sanitize(raw: any, text: string, ctx: UserContext): Interpretati
   if (Number.isInteger(du) && du >= 1 && du <= 22) out.dia_util = du;
   const card = (ctx.cartoes ?? []).find((c) => norm(c) === norm(String(raw.cartao ?? "")));
   if (card) out.cartao = card;
+  if (["credito", "debito", "pix", "dinheiro", "boleto"].includes(raw.forma_pagamento)) out.forma_pagamento = raw.forma_pagamento;
   if (typeof raw.meta === "string" && raw.meta.trim()) {
     out.meta = (ctx.metas ?? []).find((m) => norm(m) === norm(raw.meta)) ?? (out.intent === "CREATE_GOAL" ? raw.meta.trim().slice(0, 60) : undefined);
   }
   if (isDate(raw.prazo)) out.prazo = raw.prazo;
-  if (out.intent === "GOAL_CONTRIBUTE" && Number.isFinite(v) && v < 0 && out.valor === undefined && findAmounts(text).some((c) => c.role === "valor")) out.valor = Math.round(v * 100) / 100;
+  if (out.intent === "GOAL_CONTRIBUTE" && Number.isFinite(v) && v < 0 && out.valor === undefined && okValor(-v)) out.valor = Math.round(v * 100) / 100;
   const consultas = ["total", "maior", "parcelas", "saldo", "disponivel", "resumo", "comparar", "gastando_demais", "posso_comprar", "fatura", "limite", "cartoes"];
   if (consultas.includes(raw.consulta)) out.consulta = raw.consulta;
   if (raw.periodo && isDate(raw.periodo.inicio) && isDate(raw.periodo.fim) && raw.periodo.inicio <= raw.periodo.fim) {
     out.periodo = { inicio: raw.periodo.inicio, fim: raw.periodo.fim, label: String(raw.periodo.label ?? "no período").slice(0, 40) };
   }
   if (["categoria", "valor", "data", "descricao", "conta"].includes(raw.campo_correcao)) out.campo_correcao = raw.campo_correcao;
+
+  // família: de quem é, filtro de consulta e divisão
+  const membros = ctx.membros ?? [];
+  const pessoa = (x: unknown): string | undefined => {
+    const n = norm(String(x ?? ""));
+    if (!n) return undefined;
+    if (/^(eu|meu|minha|mim|voce)$/.test(n)) return membros.find((m) => m.eu)?.id;
+    if (/^(familia|nos|todos|casa|compartilhado)$/.test(n)) return "familia";
+    return membros.find((m) => norm(m.nome) === n || norm(m.nome).split(" ")[0] === n.split(" ")[0])?.id;
+  };
+  if (membros.length > 1) {
+    const dq = pessoa(raw.de_quem);
+    if (dq === "familia") out.familia = true;
+    else if (dq && membros.find((m) => m.id === dq)?.eu) out.familia = false;
+    else if (dq) out.membro_id = dq;
+    const mb = pessoa(raw.membro);
+    if (mb && /^(QUERY_|FINANCIAL_ANALYSIS)/.test(out.intent)) out.membro_id = mb;
+    if (raw.dividir === true && out.tipo !== "receita") {
+      out.dividir = true; out.familia = undefined; out.membro_id = undefined;
+      if (raw.divisao_igual === true) out.divisao_igual = true;
+      if (Array.isArray(raw.partes)) {
+        const partes = raw.partes.map((x: any) => {
+          const m = pessoa(x?.pessoa);
+          if (!m || m === "familia") return null;
+          const val = Number(x?.valor), pct = Number(x?.percentual);
+          if (Number.isFinite(pct) && pct > 0 && pct <= 100) return { membro: m, percentual: pct };
+          if (Number.isFinite(val) && val > 0 && okValor(val)) return { membro: m, valor: Math.round(val * 100) / 100 };
+          return null;
+        }).filter(Boolean);
+        if (partes.length) out.partes = partes;
+      }
+    } else if (raw.dividir === false) {
+      out.dividir = false;
+    }
+  }
   const c = Number(raw.confidence);
   out.confidence = Number.isFinite(c) ? Math.max(0, Math.min(1, c)) : 0.6;
   return out;
 }
 
-export async function interpretWithGemini(text: string, ctx: UserContext, cfg: AiConfig): Promise<Interpretation | null> {
-  if (!cfg.geminiKey) return null;
-  const { data, model } = await geminiCall(cfg, {
-    systemInstruction: { parts: [{ text: buildPrompt(ctx) }] },
-    contents: [{ role: "user", parts: [{ text }] }],
-    generationConfig: { responseMimeType: "application/json", temperature: 0 },
-  }, 15000);
-  const raw = textOf(data);
-  if (!raw) return null;
-  const parsed = sanitize(JSON.parse(raw), text, ctx);
-  if (parsed) { parsed.provider = "gemini"; parsed.model = model; }
-  return parsed;
+const GROQ_MODEL = "llama-3.3-70b-versatile";
+
+/** Chama a IA (Gemini; se falhar, Groq) e devolve o JSON já conferido. */
+export async function interpretWithAI(text: string, ctx: UserContext, cfg: AiConfig, history: Turn[] = [], pend?: PendingCtx)
+  : Promise<(Interpretation & { acao?: AiAction }) | null> {
+  const system = buildPrompt(ctx, pend);
+  const turns = history.slice(-8).filter((t) => t.texto?.trim());
+  const errs: string[] = [];
+  if (cfg.geminiKey) {
+    try {
+      const contents = [...turns.map((t) => ({ role: t.papel === "user" ? "user" : "model", parts: [{ text: t.texto }] })), { role: "user", parts: [{ text }] }];
+      // junta mensagens seguidas do mesmo papel (o Gemini exige alternância)
+      const merged: any[] = [];
+      for (const x of contents) { const last = merged[merged.length - 1]; if (last && last.role === x.role) last.parts[0].text += "\n" + x.parts[0].text; else merged.push(x); }
+      if (merged[0]?.role === "model") merged.shift();
+      const { data, model } = await geminiCall(cfg, {
+        systemInstruction: { parts: [{ text: system }] },
+        contents: merged,
+        generationConfig: { responseMimeType: "application/json", temperature: 0 },
+      }, 12000);
+      const raw = textOf(data);
+      const parsed = raw ? sanitize(JSON.parse(raw), text, ctx, pend) : null;
+      if (parsed) { parsed.provider = "gemini"; parsed.model = model; return parsed; }
+    } catch (e) { errs.push((e as Error).message); }
+  }
+  if (cfg.groqKey) {
+    try {
+      const f = cfg.fetch ?? fetch;
+      const r = await f("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { authorization: `Bearer ${cfg.groqKey}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          model: GROQ_MODEL, temperature: 0, response_format: { type: "json_object" },
+          messages: [{ role: "system", content: system },
+            ...turns.map((t) => ({ role: t.papel === "user" ? "user" : "assistant", content: t.texto })),
+            { role: "user", content: text }],
+        }),
+        signal: AbortSignal.timeout(12000),
+      });
+      if (!r.ok) throw new Error(`Groq ${r.status}`);
+      const j = await r.json();
+      const parsed = sanitize(JSON.parse(j?.choices?.[0]?.message?.content ?? "null"), text, ctx, pend);
+      if (parsed) { parsed.provider = "groq"; parsed.model = GROQ_MODEL; return parsed; }
+    } catch (e) { errs.push((e as Error).message); }
+  }
+  if (errs.length) console.warn("IA indisponível:", errs.join(" | "));
+  return null;
+}
+
+/** Mantida para compatibilidade (testes e chamadas antigas). */
+export const interpretWithGemini = (text: string, ctx: UserContext, cfg: AiConfig) => interpretWithAI(text, ctx, { ...cfg, groqKey: undefined });
+
+/** Frases curtas e óbvias ("55,98 farmácia", "gastei 50 no mercado"): as regras resolvem sem esperar a IA. */
+function rulesAreEnough(r: Interpretation, text: string): boolean {
+  const words = norm(text).split(" ").length;
+  if (r.intent === "GREETING" || r.intent === "HELP") return words <= 4;
+  if (r.confidence < 0.9 || words > 7) return false;
+  if (/^CREATE_(EXPENSE|INCOME)$/.test(r.intent)) {
+    return r.valor !== undefined && !!r.categoria && (r.categoria_confianca ?? 0) >= 0.85 && !r.dividir && !r.parcelas && !r.alternativas;
+  }
+  return false;
+}
+
+/** Junta a leitura da IA com a das regras: a IA entende o sentido; os números ditos valem pelo texto. */
+export function mergeAI(ai: Interpretation, rules: Interpretation): Interpretation {
+  const out: Interpretation = { ...ai };
+  if (rules.valor !== undefined && (ai.valor === undefined || (rules.alternativas?.length ?? 0) > 1)) { out.valor = rules.valor; out.alternativas = rules.alternativas; }
+  if (rules.parcelas && !ai.parcelas) out.parcelas = rules.parcelas;
+  if (!ai.data && rules.data) { out.data = rules.data; out.data_explicita = rules.data_explicita; }
+  if (!ai.periodo && rules.periodo) out.periodo = rules.periodo;
+  if (!out.categoria && rules.categoria) { out.categoria = rules.categoria; out.subcategoria = rules.subcategoria; out.categoria_confianca = rules.categoria_confianca; }
+  if (!out.estabelecimento && rules.estabelecimento) out.estabelecimento = rules.estabelecimento;
+  if (!out.cartao && rules.cartao && out.forma_pagamento !== "pix" && out.forma_pagamento !== "dinheiro") out.cartao = rules.cartao;
+  if (!out.conta && rules.conta && !out.cartao) out.conta = rules.conta;
+  if (!out.forma_pagamento && rules.forma_pagamento) out.forma_pagamento = rules.forma_pagamento;
+  if (rules.frequencia && !out.frequencia) { out.frequencia = rules.frequencia; out.dia = rules.dia; out.dia_util = rules.dia_util; }
+  // divisão: a IA decide SE é dividido (entende "dividido em 4 parcelas" e "é só meu"); valores ditos vêm das regras se a IA não pegou
+  if (ai.dividir === true && !ai.partes?.length && rules.partes?.length) out.partes = rules.partes;
+  if (ai.dividir === true && !ai.divisao_igual && rules.divisao_igual) out.divisao_igual = true;
+  if (ai.dividir === undefined && rules.dividir) { out.dividir = true; out.partes = rules.partes; out.divisao_igual = rules.divisao_igual; }
+  if (out.dividir === false) { out.dividir = undefined; out.partes = undefined; out.divisao_igual = undefined; }
+  if (out.familia === false) out.familia = undefined;
+  out.saudacao = rules.saudacao;
+  return out;
 }
 
 /**
- * Estratégia: regras primeiro (grátis e instantâneo). Se a confiança for baixa
- * e houver chave do Gemini, pergunta à IA. Valores encontrados pelas regras
- * têm prioridade (são extraídos literalmente do texto).
+ * Estratégia: a IA lê primeiro (entende frases livres, correções e o contexto da conversa);
+ * as regras servem de atalho para frases óbvias e de reserva se a IA estiver fora do ar.
  */
-export async function interpret(text: string, ctx: UserContext, cfg: AiConfig = {}): Promise<Interpretation> {
+export async function interpret(text: string, ctx: UserContext, cfg: AiConfig = {}, history: Turn[] = []): Promise<Interpretation> {
   const rules = interpretRules(text, ctx);
-  if (rules.intent !== "OTHER" && rules.confidence >= 0.85) return rules;
-  if (!cfg.geminiKey) return rules;
+  if (!cfg.geminiKey && !cfg.groqKey) return rules;
+  if (rulesAreEnough(rules, text)) return rules;
   try {
-    const ai = await interpretWithGemini(text, ctx, cfg);
+    const ai = await interpretWithAI(text, ctx, cfg, history);
     if (!ai || ai.intent === "OTHER") return rules;
-    if (rules.intent !== "OTHER" && rules.confidence >= ai.confidence) return rules;
-    if (rules.valor !== undefined) { ai.valor = rules.valor; ai.alternativas = rules.alternativas; }
-    if (rules.parcelas) ai.parcelas = rules.parcelas;
-    // compra dividida entre a família: quem entende a divisão são as regras
-    if (rules.dividir && ai.tipo === "despesa") {
-      ai.dividir = true; ai.partes = rules.partes; ai.divisao_igual = rules.divisao_igual;
-      if (rules.partes?.some((x) => x.valor !== undefined)) ai.valor = rules.valor;
-    }
-    if (!ai.data && rules.data) { ai.data = rules.data; ai.data_explicita = rules.data_explicita; }
-    if (!ai.periodo && rules.periodo) ai.periodo = rules.periodo;
-    ai.saudacao = rules.saudacao;
-    return ai;
+    // numa frase de lançamento bem clara para as regras, a IA hesitante não muda o tipo
+    if (rules.intent !== "OTHER" && ai.intent !== rules.intent && rules.confidence >= 0.92 && ai.confidence < 0.6) return rules;
+    delete (ai as any).acao;
+    return mergeAI(ai, rules);
   } catch (e) {
-    console.error("gemini falhou, usando regras:", (e as Error).message);
+    console.error("IA falhou, usando regras:", (e as Error).message);
     return rules;
   }
 }

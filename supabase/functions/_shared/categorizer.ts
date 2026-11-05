@@ -47,7 +47,7 @@ const RULES: Rule[] = [
   [["livro", "livros", "livraria"], "despesa", "Educação", "Livros"],
   [["material escolar", "papelaria", "caderno", "cadernos"], "despesa", "Educação", "Material escolar"],
   // Vestuário
-  [["roupa", "roupas", "camisa", "camiseta", "calca", "vestido", "blusa", "bermuda", "jaqueta", "casaco", "renner", "riachuelo", "cea", "shein"], "despesa", "Vestuário", "Roupas"],
+  [["roupa", "roupas", "camisa", "camisas", "camiseta", "camisetas", "calca", "calcas", "vestido", "vestidos", "blusa", "blusas", "bermuda", "bermudas", "jaqueta", "jaquetas", "casaco", "casacos", "moletom", "renner", "riachuelo", "cea", "shein"], "despesa", "Vestuário", "Roupas"],
   [["tenis", "sapato", "sapatos", "sandalia", "chinelo", "bota", "calcado", "calcados"], "despesa", "Vestuário", "Calçados"],
   [["bolsa", "relogio", "oculos", "bijuteria", "brinco", "colar", "acessorio", "acessorios", "cinto"], "despesa", "Vestuário", "Acessórios"],
   // Lazer

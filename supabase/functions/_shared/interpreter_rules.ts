@@ -267,7 +267,8 @@ export function parseShares(text: string, ctx: UserContext): { igual?: boolean; 
 export function detectSplit(text: string, ctx: UserContext): { partes?: NonNullable<Interpretation["partes"]>; clean: string; igual?: boolean } | null {
   if ((ctx.membros?.length ?? 0) < 2) return null;
   // "dividido em 10x" é parcelamento, não divisão entre pessoas
-  const n = norm(text).replace(/\b(dividid[oa]s?|dividi|divide|dividir|dividimos)\s+em\s+\d+\s*(x|vezes|parcelas|prestacoes)\b/g, (m) => "#".repeat(m.length));
+  const NUM = "(?:\\d+|duas|dois|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|quinze|dezoito|vinte|vinte e quatro|trinta|trinta e seis)";
+  const n = norm(text).replace(new RegExp(`\\b(dividid[oa]s?|dividi|divide|dividir|dividimos|parcelad[oa]s?)\\s+(em\\s+)?${NUM}\\s*(x|vezes|parcelas|prestacoes)\\b`, "g"), (m) => "#".repeat(m.length));
   const h = n.match(SPLIT_HALVES);
   if (h) {
     const partes: NonNullable<Interpretation["partes"]> = [];

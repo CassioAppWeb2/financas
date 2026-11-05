@@ -6,7 +6,7 @@
 
 import type { AssistantReply, Card, EngineDb, IncomingMessage, Interpretation, UserContext } from "./types.ts";
 import { runAgent, confirmAgent, type AgentCall, type GeminiContent } from "./agent.ts";
-import { interpret, extractStatement, StatementError, type AiConfig, type Statement } from "./ai.ts";
+import { interpret, interpretWithAI, extractStatement, StatementError, type AiConfig, type Statement, type Turn } from "./ai.ts";
 import { interpretRules, matchUserCategory, matchCard, matchGoal, parseShares } from "./interpreter_rules.ts";
 import { guessCategory } from "./categorizer.ts";
 import { extractAmount, findAmounts } from "./money.ts";
@@ -66,6 +66,8 @@ interface Ctx {
   interpretationId?: string;
   /** a pergunta pendente foi abandonada (a pessoa mudou de assunto) */
   dropPending?: boolean;
+  /** últimas mensagens da conversa (contexto para a IA) */
+  history?: Turn[];
 }
 
 const SUB_ICON: Record<string, string> = {
@@ -86,11 +88,11 @@ export async function handleMessage(msg: IncomingMessage, deps: AssistantDeps): 
     role: "user", channel: msg.channel, content: content || "(áudio vazio)", message_type: msg.type, audio_provider: msg.audio_provider, audio_path: msg.audio_path,
   });
   const uc = await db.rpc<UserContext>("fe_context", user, {});
-  const state = await db.rpc<{ pending: Pending | null }>("fe_chat_state", user, {});
+  const state = await db.rpc<{ pending: Pending | null; recentes?: Turn[] }>("fe_chat_state", user, { historico: true });
   // "Jarbas, gastei 50 no mercado" -> "gastei 50 no mercado"
   const voc = stripVocative(content, uc.assistente);
   if (voc.chamou) content = voc.text;
-  const c: Ctx = { msg: { ...msg, content }, user, uc, deps };
+  const c: Ctx = { msg: { ...msg, content }, user, uc, deps, history: (state.recentes ?? []).map((t: any) => ({ papel: t.papel === "user" ? "user" : "assistant", texto: t.texto })) };
 
   let out: Outcome | null = null;
   try {
@@ -114,7 +116,7 @@ export async function handleMessage(msg: IncomingMessage, deps: AssistantDeps): 
       if (itens) out = await processQueue(itens, c, saved.id);
     }
     if (!out) {
-      const interp = await interpret(content, uc, deps.ai);
+      const interp = await interpret(content, uc, deps.ai, c.history);
       const log = await db.rpc<{ id: string }>("fe_log_interpretation", user, {
         chat_message_id: saved.id, provider: interp.provider ?? "regras", model: interp.model,
         input: content, output: interp, confidence: interp.confidence,
@@ -287,7 +289,7 @@ async function processQueue(itens: QueueItem[], c: Ctx, chatMessageId: string): 
   const cards: Card[] = [];
   for (let k = 0; k < itens.length; k++) {
     const it = itens[k];
-    const interp = await interpret(it.texto, c.uc, c.deps.ai);
+    const interp = await interpret(it.texto, c.uc, c.deps.ai, c.history);
     if (it.data && !interp.data_explicita && CREATE_INTENTS.has(interp.intent)) { interp.data = it.data; interp.data_explicita = true; }
     const log = await c.deps.db.rpc<{ id: string }>("fe_log_interpretation", c.user, {
       chat_message_id: chatMessageId, provider: interp.provider ?? "regras", model: interp.model,
@@ -395,6 +397,7 @@ function enginePayload(i: Interpretation, c: Ctx, extra: Record<string, unknown>
     tipo: i.tipo, valor: i.valor, data: i.data, descricao: i.descricao, estabelecimento: i.estabelecimento,
     categoria: i.categoria, subcategoria: i.subcategoria, conta: i.conta, conta_destino: i.conta_destino,
     parcelas: i.parcelas, forma_pagamento: i.forma_pagamento, familia: i.familia, cartao: i.cartao,
+    ...(i.membro_id && i.membro_id !== "familia" && !i.familia && /^CREATE_/.test(i.intent) ? { membro_id: i.membro_id } : {}),
     origem: origin(c),
     mensagem_original: c.msg.content,
     transcricao: c.msg.type === "audio" ? c.msg.content : undefined,
@@ -432,7 +435,8 @@ async function createFlow(i: Interpretation, c: Ctx, extra: Record<string, unkno
   }
 
   // Áudio com valor "fraco" (ex.: "dois" de "dois cartões", ou um valor muito baixo sem "reais"): confirma antes
-  if (c.msg.type === "audio" && !extra.confirmado && !extra.valor_confirmado && weakAudioAmount(c.msg.content, i.valor)) {
+  if (c.msg.type === "audio" && !extra.confirmado && !extra.valor_confirmado && weakAudioAmount(c.msg.content, i.valor)
+      && findAmounts(c.msg.content).some((a) => a.role === "valor" && Math.abs(a.value - i.valor!) < 0.005)) {
     return {
       reply: `🎧 No áudio entendi o valor **${brl(Math.round(i.valor * 100))}**${i.descricao ? ` (${i.descricao})` : ""}, mas não tenho certeza. Está certo? Responda *sim* ou diga o valor correto.`,
       pending: { kind: "confirm_value", interp: i },
@@ -623,6 +627,33 @@ function looksLikeNewCommand(text: string, uc: UserContext): boolean {
   return r.intent !== "OTHER" && r.intent !== "GREETING" && r.confidence >= 0.85;
 }
 
+/** pendências que guardam um lançamento ainda não registrado (a IA pode corrigir) */
+const PEND_AI = new Set(["ask_value", "choose_value", "ask_category", "confirm_category", "ask_account", "confirm_duplicate", "confirm_create",
+  "ask_card", "ask_member_card", "ask_split", "confirm_value"]);
+/** respostas curtas e diretas ("sim", "vestuário", "1.200", "metade") ficam com as regras, sem esperar a IA */
+const trivialAnswer = (text: string) => norm(text).split(" ").filter(Boolean).length <= 2;
+/** a última pergunta que o assistente fez (sem o eco do áudio) */
+function lastQuestion(c: Ctx): string {
+  const t = [...(c.history ?? [])].reverse().find((x) => x.papel === "assistant")?.texto ?? "";
+  return t.replace(/^🎙️ Entendi seu áudio:[^\n]*\n+/, "").trim();
+}
+/** aplica a correção da IA ao lançamento em andamento */
+function applyRevision(old: Interpretation, ai: Interpretation): Interpretation {
+  const novo: Interpretation = { ...old };
+  for (const [k, v] of Object.entries(ai)) {
+    if (v === undefined || ["acao", "provider", "model", "confidence", "intent", "saudacao"].includes(k)) continue;
+    (novo as any)[k] = v;
+  }
+  if (ai.intent !== "OTHER" && /^CREATE_/.test(ai.intent)) novo.intent = ai.intent;
+  if (ai.dividir === false) { novo.dividir = undefined; novo.partes = undefined; novo.divisao_igual = undefined; }
+  if (ai.familia === false) { novo.familia = undefined; novo.membro_id = undefined; }
+  if (ai.familia === true) novo.membro_id = undefined;
+  if (ai.categoria && !ai.subcategoria) novo.subcategoria = undefined;
+  if (ai.cartao && !ai.conta) novo.conta = undefined;
+  novo.alternativas = undefined;
+  return novo;
+}
+
 async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
   const text = c.msg.content;
   const n = norm(text);
@@ -639,7 +670,18 @@ async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
     if (per.meses === undefined && !per.sem_fim) return { reply: "Não entendi o período. Responda, por exemplo: *12 meses*, *até dezembro de 2027* ou *sem fim*.", pending: p };
     return recurringFlow({ ...p.interp, ...per }, c);
   }
-  if (NO.test(n) && p.kind !== "ask_correction" && !agentAnswer) return { reply: "Ok, cancelado. 👍", pending: null };
+  // lançamento em andamento + resposta que não é um simples "sim/não/valor/nome": a IA entende correções e perguntas
+  if ("interp" in p && PEND_AI.has(p.kind) && (c.deps.ai?.geminiKey || c.deps.ai?.groqKey) && !trivialAnswer(text)) {
+    const pergunta = lastQuestion(c);
+    const ai = await interpretWithAI(text, c.uc, c.deps.ai!, c.history, { lancamento: p.interp, pergunta }).catch(() => null);
+    if (ai?.acao === "cancelar_pendente") return { reply: "Ok, cancelado — não registrei nada. 👍", pending: null };
+    if (ai?.acao === "status_pendente") return { reply: `Ainda não registrei — estou esperando só isto:\n${pergunta || "a confirmação dos dados"}`, pending: p };
+    if (ai?.acao === "nova_mensagem") { c.dropPending = true; return null; }
+    if (ai?.acao === "responder_pendente") return saveFlow(applyRevision(p.interp, ai), c, p.kind === "confirm_value" ? { valor_confirmado: true } : {});
+  }
+  // "não" sozinho cancela; "não é dividido, é só meu…" é uma correção, não um cancelamento
+  const curta = n.split(" ").length <= 4 || /^(cancela|cancelar|cancele|esquece|deixa pra la)\b/.test(n);
+  if (NO.test(n) && curta && p.kind !== "ask_correction" && !agentAnswer) return { reply: "Ok, cancelado. 👍", pending: null };
   const yes = YES.test(n);
 
   switch (p.kind) {
