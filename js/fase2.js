@@ -1,6 +1,7 @@
 // Telas da Fase 2: Cartões e faturas, Contas fixas, Metas, Orçamentos, Relatórios e Importação de extrato.
 import { incomeExpenseChart, lineChart, categoryBars } from "./charts.js";
 import * as ex from "./export.js";
+import { parseExtrato, guessDestino } from "./extrato.js";
 import { icon } from "./icons.js";
 
 let C; // utilidades do app principal (injeção para evitar dependência circular)
@@ -663,28 +664,46 @@ export async function importDialog(pref = {}, after) {
   const b = C.state.boot;
   C.modal(`<h2>Importar extrato</h2>
     <form id="if" novalidate>
-      <div class="field"><label>Arquivo do banco (OFX, CSV, PDF ou foto da fatura)</label><input class="input" type="file" name="arq" accept=".ofx,.qfx,.csv,.txt,text/csv,.pdf,application/pdf,image/jpeg,image/png"></div>
+      <div class="field"><label>Arquivo do banco (OFX, CSV, PDF ou foto da fatura)</label><input class="input" type="file" name="arq" accept=".ofx,.qfx,.csv,.txt,text/csv,.pdf,application/pdf,image/jpeg,image/png">
+        <span class="small muted" id="arqInfo"></span></div>
       <div class="field"><label>Os lançamentos são de</label><select class="input" name="destino">${payOptions(true, pref.cartao && b.cartoes?.length ? `k:${C.myCardsFirst(b.cartoes)[0].id}` : undefined)}</select></div>
       <label class="row small" style="margin-bottom:8px"><input type="checkbox" name="inverter"> Inverter sinais (use se as compras aparecerem como entradas)</label>
-      <p class="small muted">O mais preciso é o arquivo <b>OFX</b> (no app ou site do banco: Extrato → Exportar). <b>PDF ou foto</b> da fatura também funcionam: a IA lê os lançamentos (pode levar até 1 minuto) e você confere antes. Nada é salvo antes da sua confirmação, e o que já existe não entra de novo.</p>
+      <p class="small muted">O mais preciso é o arquivo <b>OFX</b> (no app ou site do banco: Extrato → Exportar/Compartilhar → OFX). <b>CSV</b>, <b>PDF ou foto</b> também funcionam. Você confere tudo antes: o que já existe não entra de novo, contas <b>a pagar</b> que aparecem no extrato são marcadas como <b>pagas</b>, e o pagamento da fatura vira <b>pagamento do cartão</b> (não conta como gasto duas vezes).</p>
       <p class="small expense hidden form-err"></p>
       <div class="modal-actions"><button type="button" class="btn" id="ic">Cancelar</button><button class="btn primary">Ver prévia</button></div>
     </form>`, (m, close) => {
     const f = $("#if", m);
     $("#ic", m).onclick = close;
+    let arquivo = pref.arquivo || null;
+    const lerTexto = async (file) => {
+      const buf = await file.arrayBuffer();
+      let text = new TextDecoder("utf-8").decode(buf);
+      if (text.includes("\uFFFD")) text = new TextDecoder("windows-1252").decode(buf);
+      return text;
+    };
+    // reconhece o banco do arquivo e já escolhe a conta/cartão certos
+    const detectar = async (file) => {
+      const info = $("#arqInfo", m); info.textContent = "";
+      if (!file || /\.(pdf|jpe?g|png)$/i.test(file.name)) return;
+      try {
+        const p = parseExtrato(await lerTexto(file));
+        const d = guessDestino(p.banco, b.contas.contas.filter((a) => a.status === "ativa"), C.myCardsFirst(b.cartoes), p.cartao, p.final);
+        if (d) f.destino.value = `${d.kind}:${d.id}`;
+        else if (p.cartao && (b.cartoes || []).length) f.destino.value = `k:${C.myCardsFirst(b.cartoes)[0].id}`;
+        info.textContent = `${p.itens.length} lançamento(s)${p.banco ? ` · ${p.banco}` : ""}${p.cartao ? " · fatura de cartão" : " · extrato de conta"}${d ? ` → ${d.nome}` : " — confira abaixo de que conta/cartão é"}`;
+      } catch (y) { info.textContent = y.message || ""; }
+    };
+    f.arq.onchange = () => { arquivo = f.arq.files[0] || null; detectar(arquivo); };
+    if (arquivo) { $("#arqInfo", m).textContent = arquivo.name; detectar(arquivo); }
     f.onsubmit = async (e) => {
       e.preventDefault();
-      const file = f.arq.files[0];
+      const file = f.arq.files[0] || arquivo;
       if (!file) return err(m, "Escolha o arquivo.");
       const isDoc = /\.(pdf|jpe?g|png)$/i.test(file.name) || /^(application\/pdf|image\/)/.test(file.type);
       if (isDoc) return readDocument(file, f, m, close, after);
       let parsed;
-      try {
-        const buf = await file.arrayBuffer();
-        let text = new TextDecoder("utf-8").decode(buf);
-        if (text.includes("�")) text = new TextDecoder("windows-1252").decode(buf);
-        parsed = /<OFX>|OFXHEADER/i.test(text) ? { ...ex.parseOFX(text), ofx: true } : ex.parseCSV(text);
-      } catch (y) { return err(m, y.message || "Não consegui ler o arquivo."); }
+      try { parsed = parseExtrato(await lerTexto(file)); }
+      catch (y) { return err(m, y.message || "Não consegui ler o arquivo."); }
       if (!parsed.itens.length) return err(m, "Não encontrei lançamentos no arquivo.");
       const [kind, id] = f.destino.value.split(":");
       // No cartão, o motor espera compras com valor positivo. Em OFX de cartão as compras vêm negativas.
@@ -692,11 +711,15 @@ export async function importDialog(pref = {}, after) {
       if (f.inverter.checked) sign = -sign;
       const itens = parsed.itens.map((i) => ({ ...i, valor: Number.isFinite(i.valor) ? i.valor * sign : null }));
       const dest = kind === "k" ? { cartao_id: id } : { conta_id: id };
+      const btn = $("button.primary", m);
+      btn.disabled = true; btn.textContent = "Analisando…";
       try {
         const prev = await C.api.rpc("app_import", { ...dest, itens });
+        await suggestCategories(prev);
         close();
         importPreview(prev, itens, dest, f.destino.selectedOptions[0].textContent, after);
       } catch (y) { err(m, y.message); }
+      finally { btn.disabled = false; btn.textContent = "Ver prévia"; }
     };
   });
 }
@@ -720,19 +743,42 @@ async function readDocument(file, f, m, close, after) {
     const dest = kind === "k" ? { cartao_id: id, vencimento: st.vencimento || null } : { conta_id: id };
     const label = kind === "k" ? `💳 ${(b.cartoes || []).find((x) => x.id === id)?.nome}${st.vencimento ? ` · fatura com vencimento em ${C.dateBR(st.vencimento)}` : ""}` : `🏦 ${b.contas.contas.find((x) => x.id === id)?.nome}`;
     const prev = await C.api.rpc("app_import", { ...dest, itens: st.itens });
+    await suggestCategories(prev);
     close();
     importPreview(prev, st.itens, dest, label, after, st.total);
   } catch (y) { err(m, y.message); }
   finally { btn.disabled = false; btn.textContent = "Ver prévia"; }
 }
 
+/** A IA sugere categoria para o que ficaria em "Outros" (sem custo: usa a IA gratuita do app). */
+async function suggestCategories(prev) {
+  const sem = prev.itens.filter((x) => x.situacao === "nova" && x.categoria_origem === "padrao");
+  if (!sem.length) return;
+  try {
+    const r = await C.api.ask({ acao: "categorizar", itens: sem.map((x) => ({ linha: x.linha, descricao: x.descricao, tipo: x.tipo })) });
+    const cats = C.state.boot.categorias;
+    for (const s of r.itens || []) {
+      const row = prev.itens.find((x) => x.linha === s.linha);
+      const cat = cats.find((c) => c.tipo === row?.tipo && c.nome === s.categoria);
+      if (!row || !cat) continue;
+      row.categoria_id = cat.id; row.categoria = cat.nome; row.categoria_origem = "ia";
+      row.subcategoria_id = (cat.subcategorias || []).find((sc) => sc.nome === s.subcategoria)?.id || null;
+      row.subcategoria = s.subcategoria || null;
+    }
+  } catch { /* sem IA agora: fica para a pessoa escolher */ }
+}
+
+const ACAO_IMPORT = new Set(["nova", "quita_pendente", "pagamento_fatura"]);
+
 function importPreview(prev, itens, dest, destLabel, after, totalDoc) {
   const rows = prev.itens;
-  const novas = rows.filter((x) => x.situacao === "nova");
+  const novas = rows.filter((x) => ACAO_IMPORT.has(x.situacao));
+  const nQuita = rows.filter((x) => x.situacao === "quita_pendente").length, nPag = rows.filter((x) => x.situacao === "pagamento_fatura").length;
   const cats = (tipo) => C.state.boot.categorias.filter((c) => c.tipo === tipo);
-  const SITL = { nova: ["Nova", "ok"], duplicada: ["Já existe", ""], pagamento: ["Pagamento da fatura", ""], invalida: ["Linha inválida", "bad"] };
+  const SITL = { nova: ["Nova", "ok"], duplicada: ["Já existe", ""], pagamento: ["Pagamento da fatura", ""], invalida: ["Linha inválida", "bad"],
+    quita_pendente: ["Marca como paga", "ok"], pagamento_fatura: ["Pagamento do cartão", "ok"] };
   C.modal(`<h2>Conferir importação</h2>
-    <p class="small muted">${C.esc(destLabel)} · ${rows.length} linhas · <b>${novas.length} novas</b> · ${rows.length - novas.length} serão ignoradas</p>
+    <p class="small muted">${C.esc(destLabel)} · ${rows.length} linhas · <b>${novas.length - nQuita - nPag} novas</b>${nQuita ? ` · <b>${nQuita}</b> conta(s) a pagar/receber serão marcadas como pagas` : ""}${nPag ? ` · <b>${nPag}</b> pagamento(s) de fatura` : ""} · ${rows.length - novas.length} serão ignoradas</p>
     ${totalDoc != null ? (() => {
       const soma = rows.filter((x) => x.situacao === "nova" || x.situacao === "duplicada").reduce((t, x) => t + (x.tipo === "despesa" ? x.valor_cents : -x.valor_cents), 0);
       const tot = Math.round(totalDoc * 100);
@@ -740,11 +786,11 @@ function importPreview(prev, itens, dest, destLabel, after, totalDoc) {
         : `<p class="notice">⚠️ A soma lida (${C.brl(soma)}) é diferente do total da fatura (${C.brl(tot)}). Pode ser saldo anterior, juros ou uma linha que a IA não leu — confira.</p>`;
     })() : ""}
     <div class="imp-wrap"><table class="tbl imp"><thead><tr><th></th><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th></th></tr></thead><tbody>
-      ${rows.map((x) => `<tr data-l="${x.linha}" class="${x.situacao !== "nova" ? "off" : ""}">
-        <td>${x.situacao === "nova" ? `<input type="checkbox" checked data-ok>` : ""}</td>
+      ${rows.map((x) => `<tr data-l="${x.linha}" class="${!ACAO_IMPORT.has(x.situacao) ? "off" : ""}">
+        <td>${ACAO_IMPORT.has(x.situacao) ? `<input type="checkbox" checked data-ok>` : ""}</td>
         <td class="num">${x.data ? C.dateBR(x.data) : "—"}</td>
-        <td>${C.esc(x.descricao || "")}${x.situacao === "duplicada" && x.duplicada_de ? `<div class="small muted">igual a “${C.esc(x.duplicada_de.descricao)}” de ${C.dateBR(x.duplicada_de.data)}</div>` : ""}</td>
-        <td>${x.situacao === "nova" ? `<select class="input small" data-cat>${opts(cats(x.tipo).map((c) => [c.id, `${c.icone || ""} ${c.nome}`]), x.categoria_id)}</select>` : ""}</td>
+        <td>${C.esc(x.descricao || "")}${x.situacao === "duplicada" && x.duplicada_de ? `<div class="small muted">igual a “${C.esc(x.duplicada_de.descricao)}” de ${C.dateBR(x.duplicada_de.data)}</div>` : ""}${x.situacao === "quita_pendente" && x.pendente ? `<div class="small muted">é a conta “${C.esc(x.pendente.descricao || "")}” de ${C.dateBR(x.pendente.data)} (${C.brl(x.pendente.valor_cents)})</div>` : ""}${x.situacao === "pagamento_fatura" ? `<div class="small muted">fatura do ${C.esc(x.cartao || "cartão")}</div>` : ""}</td>
+        <td>${x.situacao === "nova" ? `<select class="input small" data-cat data-sub="${x.subcategoria_id || ""}">${opts(cats(x.tipo).map((c) => [c.id, `${c.icone || ""} ${c.nome}`]), x.categoria_id)}</select>${x.categoria_origem === "ia" ? `<div class="small muted">✨ sugerida pela IA${x.subcategoria ? ` · ${C.esc(x.subcategoria)}` : ""}</div>` : ""}` : ""}</td>
         <td class="num ${x.tipo === "receita" ? "income" : "expense"}">${x.valor_cents ? (x.tipo === "receita" ? "+ " : "− ") + C.brl(x.valor_cents) : ""}</td>
         <td><span class="tag ${SITL[x.situacao]?.[1] || ""}">${SITL[x.situacao]?.[0] || x.situacao}</span></td></tr>`).join("")}
     </tbody></table></div>
@@ -758,12 +804,18 @@ function importPreview(prev, itens, dest, destLabel, after, totalDoc) {
       const send = itens.map((it, i) => {
         const tr = $(`tr[data-l="${i + 1}"]`, m);
         const ok = tr?.querySelector("[data-ok]");
-        return { ...it, ignorar: ok ? !ok.checked : true, categoria_id: tr?.querySelector("[data-cat]")?.value || null };
+        const sel = tr?.querySelector("[data-cat]");
+        const row = rows.find((x) => x.linha === i + 1);
+        // subcategoria sugerida só vale se a categoria não foi trocada
+        const sub = sel && row && sel.value === row.categoria_id ? sel.dataset.sub || null : null;
+        return { ...it, ignorar: ok ? !ok.checked : true, categoria_id: sel?.value || null, subcategoria_id: sub };
       });
       $("#pok", m).disabled = true; $("#pok", m).textContent = "Importando…";
       try {
         const r = await C.api.rpc("app_import", { ...dest, itens: send, confirmar: true });
-        close(); C.state.boot = null; C.toast(`${r.importados} lançamento(s) importado(s) ✅`); after?.();
+        close(); C.state.boot = null;
+        C.toast([`${r.importados} lançamento(s) importado(s) ✅`, r.quitados ? `${r.quitados} conta(s) marcada(s) como paga(s)` : "", r.faturas_pagas ? `${r.faturas_pagas} pagamento(s) de fatura` : ""].filter(Boolean).join(" · "));
+        after?.();
       } catch (y) { C.toast(y.message); $("#pok", m).disabled = false; count(); }
     };
   });
