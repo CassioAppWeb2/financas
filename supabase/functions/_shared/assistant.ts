@@ -1028,11 +1028,16 @@ async function applyCorrection(p: Record<string, unknown>, c: Ctx): Promise<Outc
 }
 
 async function correctFlow(i: Interpretation, c: Ctx): Promise<Outcome> {
+  // o campo que a pessoa pediu para corrigir vale primeiro (a IA costuma repetir a categoria atual junto,
+  // e isso não pode esconder a correção de data/valor/conta)
   const fix: Record<string, unknown> = {};
-  if (i.categoria) { fix.categoria = i.categoria; fix.subcategoria = i.subcategoria; }
-  else if (i.campo_correcao === "valor" && i.valor) fix.valor = i.valor;
-  else if (i.campo_correcao === "data" && i.data) fix.data = i.data;
-  else if (i.campo_correcao === "conta" && i.conta) fix.conta = i.conta;
+  const campo = i.campo_correcao;
+  if (campo === "data" && i.data) fix.data = i.data;
+  else if (campo === "valor" && i.valor) fix.valor = i.valor;
+  else if (campo === "conta" && i.conta) fix.conta = i.conta;
+  else if (campo === "descricao" && i.descricao) fix.descricao = i.descricao;
+  else if (i.categoria && (!campo || campo === "categoria")) { fix.categoria = i.categoria; fix.subcategoria = i.subcategoria; }
+  else if (!campo && i.data_explicita && i.data) fix.data = i.data;
   if (Object.keys(fix).length) return applyCorrection({ id: "ultimo", tipo: i.tipo, ...fix }, c);
   const t = await c.deps.db.rpc<any>("fe_target", c.user, { id: "ultimo", tipo: i.tipo });
   if (!t?.id) return { reply: "Não encontrei lançamentos para corrigir." };

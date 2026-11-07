@@ -130,3 +130,16 @@ describe("correções no meio da conversa", () => {
     expect(rec.some((m: any) => m.papel === "assistant")).toBe(true);
   });
 });
+
+describe("correções", () => {
+  test("“o salário foi no dia 30/10” muda a data, mesmo com a IA repetindo a categoria atual", async () => {
+    await say(ca, "Recebi 6 mil de salário.");
+    respostas.push([/dia 30/, { intent: "EDIT_TRANSACTION", tipo: "receita", valor: 10, data: "2026-10-30", campo_correcao: "data",
+      categoria: "Salário e remuneração", subcategoria: "Salário", descricao: "Salário", confidence: 0.95 }]);
+    const r = await say(ca, "O salário foi recebido no dia 30 do 10 da mensagem anterior.");
+    expect(r.reply).toContain("data:");
+    expect(r.reply).toContain("**30/10/2026**");
+    const [t] = await q(`select date::text d, amount_cents::int v from transactions where user_id = $1 and type = 'receita' and deleted_at is null order by created_at desc limit 1`, ca);
+    expect([t.d, t.v]).toEqual(["2026-10-30", 600000]);
+  });
+});
