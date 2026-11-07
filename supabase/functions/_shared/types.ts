@@ -72,6 +72,8 @@ export interface Interpretation {
   valor_unitario?: number;
   /** a mesma compra paga de formas diferentes: "3 no Pix e 2 em dinheiro" -> um lançamento por forma */
   pagamentos?: { forma_pagamento?: string; conta?: string; cartao?: string; quantidade?: number; valor?: number }[];
+  /** alguém de FORA da família vai pagar/devolver parte da compra: "cobrar de outra pessoa os 2 mil em 10 meses, todo dia 10" */
+  a_receber?: { valor: number; parcelas: number; dia?: number; de?: string };
   confidence: number;
   provider?: string;
   model?: string;

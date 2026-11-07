@@ -7,6 +7,7 @@ import { INTENTS, type Interpretation, type UserContext } from "./types.ts";
 import { interpretRules } from "./interpreter_rules.ts";
 import { findAmounts } from "./money.ts";
 import { norm } from "./text.ts";
+import { resolveDate } from "./dates.ts";
 
 export interface AiConfig {
   geminiKey?: string;
@@ -106,6 +107,7 @@ Leia a ÚLTIMA mensagem do usuário (as anteriores são só contexto) e responda
  "valor_unitario": preço de UMA unidade, se foi dito ("12 cada", "cada uma custou 12", "a 12 reais a unidade"),
  "pagamentos": [{"forma_pagamento": ..., "conta": ..., "cartao": ..., "quantidade": n, "valor": reais}] — SÓ quando a mesma compra foi paga de formas diferentes ("3 no Pix e 2 em dinheiro", "100 no débito e o resto no crédito"),
  "parcelas": inteiro (compra parcelada: "em 4x", "quatro parcelas", "dividido em 10 vezes"),
+ "a_receber": {"valor": TOTAL que a outra pessoa vai pagar em reais, "parcelas": em quantas vezes/meses (1 se de uma vez), "dia": dia do mês para cobrar, "de": quem vai pagar ("outra pessoa", "João")} — quando alguém de FORA da família vai pagar ou devolver uma parte (cobrar de alguém, "fulano vai me pagar 2 mil em 10 vezes"),
  "data": "AAAA-MM-DD" (só se a data foi dita: "ontem", "dia 10"),
  "descricao": o que foi comprado/recebido, curto, com inicial maiúscula (ex.: "Camisetas", "Sofá"),
  "estabelecimento": nome da loja/empresa se citado (ex.: "Minimal Club"),
@@ -131,6 +133,8 @@ A última pergunta do assistente foi: "${pend.pergunta.slice(0, 400)}"
 Regras: NUNCA invente valores, datas, contas ou cartões que não estejam na mensagem (ou no lançamento em andamento). Se o valor não foi dito, omita "valor".
 QUANTIDADE NÃO É PREÇO: em "comprei 5 cervejas, 3 delas no Pix e 2 em dinheiro" os números 5, 3 e 2 são quantidades — quantidade=5, pagamentos=[{"forma_pagamento":"pix","quantidade":3},{"forma_pagamento":"dinheiro","quantidade":2}] e SEM "valor" (o preço não foi dito).
 Se depois disserem "cada uma é 12", isso é valor_unitario=12 (responder_pendente); não some nem multiplique você mesmo, só informe quantidade e valor_unitario.
+PESSOA DE FORA DA FAMÍLIA NÃO É DIVISÃO: "dividir" é só com pessoas da família listadas abaixo. Em "comprei um Corsa por 10 mil, eu vou pagar 8 mil, preciso cobrar de outra pessoa os 2 mil todo dia 10 durante 10 meses": valor=10000 (o que foi pago na compra), dividir=false, a_receber={"valor":2000,"parcelas":10,"dia":10,"de":"outra pessoa"}. "a_receber.valor" é SEMPRE o TOTAL a receber; o app divide pelas parcelas (2000 em 10 vezes = 200 por mês). Só se a pessoa disser claramente o valor de CADA mês ("vai me pagar 200 por mês durante 10 meses"), mande "valor_parcela": 200 em vez de "valor".
+"todo dia 10" / "dia 10 de cada mês" é o dia de cobrar ou pagar, NÃO a data da compra: nesse caso não preencha "data" (a compra é de hoje).
 Ignore no início da mensagem palavras soltas que não fazem parte do pedido (ruído do áudio, como "o que você diz?").
 Categoria pelo SENTIDO do que foi comprado: bebidas/cerveja em bar ou festa -> lazer (restaurantes de lazer/bares), cerveja no mercado -> supermercado; "Hobbies" só para passatempos (artesanato, coleções, instrumentos).
 Use as mensagens anteriores só para entender referências ("o mesmo", "aquele", "foi no Nubank").
@@ -228,13 +232,64 @@ export function sanitize(raw: any, text: string, ctx: UserContext, pend?: Pendin
     }
   }
   unitsAndPayments(raw, out, text, ctx, pend, okValor);
+  receivableAndGuards(raw, out, text, ctx, pend, okValor);
   const c = Number(raw.confidence);
   out.confidence = Number.isFinite(c) ? Math.max(0, Math.min(1, c)) : 0.6;
   return out;
 }
 
 const r2 = (x: number) => Math.round(x * 100) / 100;
-const FORMAS = ["credito", "debito", "pix", "dinheiro", "boleto"];
+
+// "todo dia 10", "dia 10 de cada mês", "todos os meses no dia 10": dia de cobrar/pagar, não a data da compra
+const DIA_DO_MES = /\b(?:todo|todos os|cada) (?:dia|mes|meses)\b[^,.;!?]*|\bdia \d{1,2} (?:de )?(?:cada|todo) mes\b[^,.;!?]*/;
+// alguém vai pagar/devolver: os números de prazo e dia da frase são da cobrança
+export const COBRANCA = /\b(cobrar|receber de|me (?:pagar|pague|paga|devolver|devolve|deve)|vai me pagar)\b/;
+// palavras que mostram uma divisão de verdade (com alguém da família)
+const DIVISAO = /\b(divid\w*|rache\w*|racham\w*|rachar|meio a meio|metade|cada um paga|partes iguais|dividi)\b/;
+
+/**
+ * - Valor a receber de alguém de fora da família, em parcelas (o app divide o total pelo número de parcelas).
+ * - Divisão só com alguém da família, quando a frase fala em dividir ou cita o nome da pessoa.
+ * - "todo dia 10" não é a data da compra.
+ */
+function receivableAndGuards(raw: any, out: Interpretation, text: string, ctx: UserContext, pend: PendingCtx | undefined, okValor: (x: number) => boolean) {
+  const n = norm(text);
+  const numeros = new Set(findAmounts(text).map((a) => a.value));
+  const ar = raw.a_receber;
+  if (ar && typeof ar === "object" && out.tipo !== "receita") {
+    const parc = Number(ar.parcelas), dia = Number(ar.dia);
+    const parcelas = Number.isInteger(parc) && parc >= 1 && parc <= 120 && (parc === 1 || numeros.has(parc) || pend?.lancamento.a_receber?.parcelas === parc) ? parc : 1;
+    let valor: number | undefined;
+    const tot = Number(ar.valor), vp = Number(ar.valor_parcela);
+    if (Number.isFinite(vp) && vp > 0 && okValor(vp) && parcelas > 1) valor = r2(vp * parcelas);
+    else if (Number.isFinite(tot) && tot > 0 && (okValor(tot) || pend?.lancamento.a_receber?.valor === tot)) valor = r2(tot);
+    if (valor !== undefined && (out.valor === undefined || valor <= out.valor)) {
+      out.a_receber = {
+        valor, parcelas,
+        dia: Number.isInteger(dia) && dia >= 1 && dia <= 31 ? dia : undefined,
+        de: typeof ar.de === "string" && ar.de.trim() ? ar.de.trim().slice(0, 40) : undefined,
+      };
+      out.dividir = undefined; out.partes = undefined; out.divisao_igual = undefined;
+      out.recorrente = undefined; out.frequencia = undefined; out.dia = undefined;
+      if (out.intent === "CREATE_RECURRING" || out.intent === "CREATE_INCOME") out.intent = "CREATE_EXPENSE";
+    }
+  }
+  if (!out.a_receber && pend?.lancamento.a_receber) out.a_receber = pend.lancamento.a_receber;
+  // divisão com a família: precisa falar em dividir ou citar o nome de alguém da família
+  if (out.dividir) {
+    const nomes = (ctx.membros ?? []).filter((m) => !m.eu).map((m) => norm(m.nome).split(" ")[0]).filter((x) => x.length >= 3);
+    const citou = nomes.some((x) => new RegExp(`\\b${x}\\b`).test(n));
+    const fora = /\b(outra pessoa|outras pessoas|alguem|um amigo|uma amiga|terceiro|cliente)\b/.test(n);
+    if ((!DIVISAO.test(n) && !citou) || (fora && !citou)) { out.dividir = undefined; out.partes = undefined; out.divisao_igual = undefined; }
+  }
+  // "todo dia 10": se a única data da frase é o dia de cobrar/pagar, a compra é de hoje
+  if (out.data_explicita && DIA_DO_MES.test(n)) {
+    const resto = resolveDate(n.replace(new RegExp(DIA_DO_MES.source, "g"), " "), ctx.hoje);
+    if (!resto.explicita && out.intent !== "CREATE_RECURRING" && !out.recorrente) { out.data = undefined; out.data_explicita = undefined; }
+  }
+}
+
+const FORMAS =["credito", "debito", "pix", "dinheiro", "boleto"];
 
 /**
  * Compra por unidade e pagamento em mais de uma forma. As contas são feitas AQUI (a IA só diz
@@ -378,6 +433,9 @@ export function mergeAI(ai: Interpretation, rules: Interpretation): Interpretati
   // compra por unidade / em várias formas: o valor é calculado a partir do que a IA separou; as regras
   // confundiriam uma quantidade ("2 com dinheiro") com o preço
   const porUnidade = (ai.quantidade ?? 0) > 1 || (ai.pagamentos?.length ?? 0) > 1 || ai.valor_unitario !== undefined;
+  // compra com valor a receber de outra pessoa: a frase tem vários números (total, minha parte, parte dela, dia, meses)
+  // e só a IA separa o que é cada um; as regras não completam nada aqui
+  if (ai.a_receber) return { ...out, saudacao: rules.saudacao };
   if (!porUnidade && rules.valor !== undefined && (ai.valor === undefined || (rules.alternativas?.length ?? 0) > 1)) { out.valor = rules.valor; out.alternativas = rules.alternativas; }
   if (rules.parcelas && !ai.parcelas) out.parcelas = rules.parcelas;
   if (!ai.data && rules.data) { out.data = rules.data; out.data_explicita = rules.data_explicita; }
@@ -412,6 +470,12 @@ export async function interpret(text: string, ctx: UserContext, cfg: AiConfig = 
     // numa frase de lançamento bem clara para as regras, a IA hesitante não muda o tipo
     if (rules.intent !== "OTHER" && ai.intent !== rules.intent && rules.confidence >= 0.92 && ai.confidence < 0.6) return rules;
     delete (ai as any).acao;
+    // frase com cobrança de alguém ("cobrar de outra pessoa 2 mil todo dia 10 durante 10 meses"): os prazos e dias
+    // falam da cobrança, não da compra — as regras não podem virar isso em parcelas ou data da compra
+    if (COBRANCA.test(norm(text))) {
+      const { parcelas: _p, data: _d, data_explicita: _de, frequencia: _f, dia: _di, dia_util: _du, dividir: _dv, partes: _pt, divisao_igual: _di2, recorrente: _r, alternativas: _a, ...resto } = rules;
+      return mergeAI(ai, { ...resto, valor: undefined } as Interpretation);
+    }
     return mergeAI(ai, rules);
   } catch (e) {
     console.error("IA falhou, usando regras:", (e as Error).message);

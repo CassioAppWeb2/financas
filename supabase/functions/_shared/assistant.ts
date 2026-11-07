@@ -256,6 +256,8 @@ function itemOk(text: string, uc: UserContext): boolean {
 export function splitItems(text: string, uc: UserContext): QueueItem[] | null {
   const n = norm(text);
   if (/\?\s*$/.test(text) || /^(quanto|qual|quais|posso|como|compare|compara)\b/.test(n) || /\bou\b/.test(n)) return null;
+  // uma compra só, com partes de quem paga/vai pagar ("eu pago 8 mil, cobrar de outra pessoa os 2 mil"): não separar
+  if (/\b(cobrar|receber de|me (?:pagar|pague|paga|devolver|devolve|deve)|vai me|outra pessoa|eu vou pagar|minha parte|parte dela|parte dele)\b/.test(n)) return null;
   if (findAmounts(text).filter((a) => a.role === "valor" && a.value > 0).length < 2) return null;
   const parts = text.split(SEP);
   const pieces: string[] = [];
@@ -441,6 +443,7 @@ async function createFlow(i: Interpretation, c: Ctx, extra: Record<string, unkno
     return { reply: `${audio}Entendi ${TIPO_LABEL[tipo]}${what}. Qual foi o valor?`, pending: { kind: "ask_value", interp: i } };
   }
   if (pags) return multiPayFlow(i, pags, c, extra);
+  if (i.a_receber && !extra.parte) return receivableFlow(i, i.a_receber, c, extra);
   // pagou em dinheiro/Pix sem dizer a conta: usa a conta que combina com a forma de pagamento
   if (!i.conta && !i.cartao && (tipo === "despesa" || tipo === "receita") && i.forma_pagamento && i.forma_pagamento !== "credito") {
     const conta = await accountForPayment(i.forma_pagamento, c);
@@ -548,6 +551,40 @@ async function accountForPayment(forma: string, c: Ctx): Promise<string | undefi
   }
   if (padrao && !dinheiro(padrao)) return undefined;                // a conta padrão já é de banco
   return escolhe(base.filter((a: any) => !dinheiro(a)))?.nome;
+}
+
+/**
+ * Compra em que alguém de fora da família vai pagar uma parte: lança a compra inteira (o que saiu do bolso)
+ * e programa o valor a receber, dividido em parcelas mensais, com aviso em cada vencimento.
+ */
+async function receivableFlow(i: Interpretation, ar: NonNullable<Interpretation["a_receber"]>, c: Ctx, extra: Record<string, unknown>): Promise<Outcome> {
+  const compra = await createFlow({ ...i, a_receber: undefined, dividir: undefined, partes: undefined }, c, { ...extra, parte: true });
+  if (compra.pending) return { ...compra, pending: { ...compra.pending, interp: { ...(compra.pending as any).interp, a_receber: ar } } as any };
+  const cents = Math.round(ar.valor * 100);
+  const parc = Math.max(1, ar.parcelas);
+  const parcela = Math.floor(cents / parc) / 100;        // centavos que sobram ficam no total informado abaixo
+  const de = ar.de && !/^outra pessoa$/i.test(ar.de) ? ar.de : "";
+  const nomeCat = (nomes: string[]) => c.uc.categorias.find((x) => x.tipo === "receita" && nomes.includes(norm(x.nome)))?.nome;
+  const categoria = nomeCat(["reembolsos"]) ?? nomeCat(["outras receitas", "outros"]);
+  const descricao = `A receber${de ? ` de ${de}` : ""} — ${i.descricao ?? "compra"}`;
+  const hoje = c.uc.hoje;
+  let dia = ar.dia;
+  if (!dia) dia = Number(hoje.slice(8, 10));
+  const r = await c.deps.db.rpc<any>("fe_save_recurring", c.user, {
+    tipo: "receita", valor: parcela, descricao, categoria, conta: i.conta, frequencia: "mensal", dia,
+    meses: parc, origem: origin(c),
+  }).catch((e: Error) => ({ status: "erro", erro: e.message }));
+  if (r.status === "erro" || !r.recorrencia) {
+    return { ...compra, reply: `${compra.reply}\n\n⚠️ Não consegui programar o valor a receber (${brl(cents)}). Me diga de novo: “cobrar ${brl(cents)} em ${parc} vezes, todo dia ${dia}”.` };
+  }
+  // é uma cobrança com fim certo: no último mês não pergunta se quer renovar
+  try { await c.deps.db.rpc<any>("fe_renew_recurring", c.user, { id: r.recorrencia.id, encerrar: true, origem: origin(c) }); } catch { /* só o aviso de renovar */ }
+  const x = r.recorrencia;
+  const deQuem = de ? ` de **${de}**` : "";
+  const reply = `${compra.reply}\n\n📥 A receber${deQuem}: **${brl(cents)}** em **${parc}x de ${brl(Math.round(parcela * 100))}**, todo dia ${dia}` +
+    ` (de ${mesAno(r.primeira)} a ${mesAno(x.ultima ?? x.fim)}).` +
+    `\n🔔 Eu aviso em cada vencimento. Quando receber, me diga “recebi ${brl(Math.round(parcela * 100))}” que eu dou baixa na parcela.`;
+  return { ...compra, reply };
 }
 
 /** Aplica o preço dito à compra por unidade (preço de cada uma ou total) e reparte entre as formas de pagamento. */

@@ -143,3 +143,42 @@ describe("correções", () => {
     expect([t.d, t.v]).toEqual(["2026-10-30", 600000]);
   });
 });
+
+describe("compra com valor a receber de alguém de fora da família", () => {
+  const frase = "Comprei um corsa por 10 mil! Eu vou pagar 8 mil, preciso cobrar de outra pessoa os 2 mil, me lembrar de cobrar todo dia 10 de cada mês durante 10 meses";
+  test("Corsa: compra de 10 mil hoje + 10 parcelas de 200 a receber (não 10 de 2.000, nada para a Bruna)", async () => {
+    respostas.unshift([/corsa por 10 mil/, { intent: "CREATE_EXPENSE", tipo: "despesa", valor: 10000, descricao: "Corsa", categoria: "Transporte",
+      dividir: false, a_receber: { valor: 2000, parcelas: 10, dia: 10, de: "outra pessoa" }, confidence: 0.95 }]);
+    const r = await say(ca, frase);
+    expect(r.reply).toContain("**R$ 10.000,00**");
+    expect(r.reply).toContain("**10x de R$ 200,00**");
+    expect(r.reply).not.toContain("Bruna");
+    const desp = await q(`select amount_cents::int v, date::text d, member_id from transactions where user_id = $1 and description = 'Corsa' and deleted_at is null`, ca);
+    expect(desp.map((t) => t.v)).toEqual([1000000]);
+    const hoje = (await q(`select fe_today($1::uuid)::text d`, ca))[0].d;
+    expect(desp[0].d).toBe(hoje);
+    const rec = await q(`select amount_cents::int v, extract(day from date)::int dia from transactions where user_id = $1 and type = 'receita' and description like 'A receber%' and deleted_at is null`, ca);
+    expect(rec.length).toBe(10);
+    expect(rec.every((t) => t.v === 20000 && t.dia === 10)).toBe(true);
+    // recebeu a 1ª parcela: dá baixa nela, sem criar outra receita
+    respostas.unshift([/^recebi R\$ 200/, { intent: "CREATE_INCOME", tipo: "receita", valor: 200, confidence: 0.9 }]);
+    const b = await say(ca, "recebi R$ 200,00");
+    respostas.shift();
+    const st = await q(`select status, count(*)::int n from transactions where user_id = $1 and type = 'receita' and amount_cents = 20000 and deleted_at is null group by status order by status`, ca);
+    expect(b.reply).toContain("Marquei como *recebido*");
+    expect(st.map((x) => [x.status, x.n])).toEqual([["efetivado", 1], ["previsto", 9]]);
+    respostas.shift();
+  });
+
+  test("mesmo se a IA errar (divide com a família e usa o dia 10 como data), o app não joga a parte para a Bruna", async () => {
+    respostas.unshift([/corsa por 10 mil/, { intent: "CREATE_EXPENSE", tipo: "despesa", valor: 10000, data: "2026-10-10", descricao: "Corsa",
+      categoria: "Transporte", dividir: true, partes: [{ pessoa: "eu", valor: 8000 }], confidence: 0.95 }]);
+    await q(`update transactions set deleted_at = now() where user_id = $1 and description = 'Corsa'`, ca);
+    const r = await say(ca, frase.replace("corsa", "corsa"));
+    expect(r.reply).not.toContain("Bruna");
+    const desp = await q(`select amount_cents::int v, date::text d from transactions where user_id = $1 and description = 'Corsa' and deleted_at is null`, ca);
+    const hoje = (await q(`select fe_today($1::uuid)::text d`, ca))[0].d;
+    expect(desp.map((t) => [t.v, t.d])).toEqual([[1000000, hoje]]);
+    respostas.shift();
+  });
+});
