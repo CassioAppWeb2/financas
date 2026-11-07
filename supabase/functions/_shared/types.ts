@@ -67,6 +67,11 @@ export interface Interpretation {
   partes?: { membro: string; cartao?: string; cartao_do_membro?: boolean; conta?: string; valor?: number; percentual?: number }[];
   /** divisão em partes iguais dita na frase ("metade", "meio a meio", "partes iguais") */
   divisao_igual?: boolean;
+  /** compra por unidade: "5 cervejas" (quantidade) a "12 cada" (valor_unitario) */
+  quantidade?: number;
+  valor_unitario?: number;
+  /** a mesma compra paga de formas diferentes: "3 no Pix e 2 em dinheiro" -> um lançamento por forma */
+  pagamentos?: { forma_pagamento?: string; conta?: string; cartao?: string; quantidade?: number; valor?: number }[];
   confidence: number;
   provider?: string;
   model?: string;

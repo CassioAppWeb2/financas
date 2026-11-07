@@ -59,6 +59,24 @@ export async function geminiCall(cfg: AiConfig, body: unknown, timeoutMs: number
   }
 }
 
+/**
+ * Para entender frases, os modelos "lite" respondem mais rápido mas erram mais (ex.: confundem
+ * quantidade com preço). Pergunta a todos; se um lite chegar primeiro, espera um pouco por um completo.
+ */
+export async function geminiPreferFull(cfg: AiConfig, body: unknown, timeoutMs: number, esperaMs = 3500): Promise<{ data: any; model: string }> {
+  const all = [...new Set([cfg.geminiModel, ...GEMINI_MODELS].filter(Boolean) as string[])];
+  const full = all.filter((m) => !/lite/.test(m)), lite = all.filter((m) => /lite/.test(m));
+  if (!full.length || !lite.length) return geminiCall(cfg, body, timeoutMs, all);
+  const pFull = geminiCall(cfg, body, timeoutMs, full);
+  const pLite = geminiCall(cfg, body, timeoutMs, lite);
+  pFull.catch(() => {}); pLite.catch(() => {});
+  const first = await Promise.any([pFull.then((r) => ({ r, full: true })), pLite.then((r) => ({ r, full: false }))])
+    .catch(() => { throw new Error("Gemini indisponível"); });
+  if (first.full) return first.r;
+  const f = await Promise.race([pFull.catch(() => null), new Promise<null>((res) => setTimeout(() => res(null), esperaMs))]);
+  return f ?? first.r;
+}
+
 // ---------------------------------------------------------------------------
 // INTERPRETAÇÃO COM IA
 // A IA lê a mensagem com o contexto da pessoa (categorias, contas, cartões, família), as últimas
@@ -84,6 +102,9 @@ Leia a ÚLTIMA mensagem do usuário (as anteriores são só contexto) e responda
  "intent": um de [${INTENTS.join(", ")}],
  "tipo": "despesa"|"receita"|"transferencia"|"investimento"|"resgate",
  "valor": número em reais do TOTAL (R$ 1.500,00 = 1500; "1,5 mil" = 1500; "total de 508" = 508),
+ "quantidade": inteiro, quantas unidades foram compradas ("5 cervejas" = 5; "duas pizzas" = 2),
+ "valor_unitario": preço de UMA unidade, se foi dito ("12 cada", "cada uma custou 12", "a 12 reais a unidade"),
+ "pagamentos": [{"forma_pagamento": ..., "conta": ..., "cartao": ..., "quantidade": n, "valor": reais}] — SÓ quando a mesma compra foi paga de formas diferentes ("3 no Pix e 2 em dinheiro", "100 no débito e o resto no crédito"),
  "parcelas": inteiro (compra parcelada: "em 4x", "quatro parcelas", "dividido em 10 vezes"),
  "data": "AAAA-MM-DD" (só se a data foi dita: "ontem", "dia 10"),
  "descricao": o que foi comprado/recebido, curto, com inicial maiúscula (ex.: "Camisetas", "Sofá"),
@@ -108,6 +129,10 @@ A última pergunta do assistente foi: "${pend.pergunta.slice(0, 400)}"
 - Se pede para desistir dele: acao="cancelar_pendente". Se pergunta se já foi feito/lançado: acao="status_pendente".
 - Se é um assunto novo, sem relação: acao="nova_mensagem".` : `Não há lançamento em andamento: use acao="nova_mensagem".`}
 Regras: NUNCA invente valores, datas, contas ou cartões que não estejam na mensagem (ou no lançamento em andamento). Se o valor não foi dito, omita "valor".
+QUANTIDADE NÃO É PREÇO: em "comprei 5 cervejas, 3 delas no Pix e 2 em dinheiro" os números 5, 3 e 2 são quantidades — quantidade=5, pagamentos=[{"forma_pagamento":"pix","quantidade":3},{"forma_pagamento":"dinheiro","quantidade":2}] e SEM "valor" (o preço não foi dito).
+Se depois disserem "cada uma é 12", isso é valor_unitario=12 (responder_pendente); não some nem multiplique você mesmo, só informe quantidade e valor_unitario.
+Ignore no início da mensagem palavras soltas que não fazem parte do pedido (ruído do áudio, como "o que você diz?").
+Categoria pelo SENTIDO do que foi comprado: bebidas/cerveja em bar ou festa -> lazer (restaurantes de lazer/bares), cerveja no mercado -> supermercado; "Hobbies" só para passatempos (artesanato, coleções, instrumentos).
 Use as mensagens anteriores só para entender referências ("o mesmo", "aquele", "foi no Nubank").
 Perguntas sobre gastos/saldo/finanças são consultas (QUERY_* ou FINANCIAL_ANALYSIS). Cadastros/alterações de cartão, conta ou categoria = ADMIN.
 PAY_INVOICE = pagou a fatura do cartão; GOAL_CONTRIBUTE = guardou/tirou dinheiro de uma meta; CANCEL_RECURRING = parou de pagar uma conta fixa; QUERY_RECURRING = listar contas fixas; QUERY_ALERTS = avisos; QUERY_DEBTS = quem deve para quem; SETTLE_DEBT = acertou com alguém da família.
@@ -202,9 +227,86 @@ export function sanitize(raw: any, text: string, ctx: UserContext, pend?: Pendin
       out.dividir = false;
     }
   }
+  unitsAndPayments(raw, out, text, ctx, pend, okValor);
   const c = Number(raw.confidence);
   out.confidence = Number.isFinite(c) ? Math.max(0, Math.min(1, c)) : 0.6;
   return out;
+}
+
+const r2 = (x: number) => Math.round(x * 100) / 100;
+const FORMAS = ["credito", "debito", "pix", "dinheiro", "boleto"];
+
+/**
+ * Compra por unidade e pagamento em mais de uma forma. As contas são feitas AQUI (a IA só diz
+ * quantidades e preços), e cada número precisa ter sido dito na mensagem ou no lançamento em andamento.
+ */
+function unitsAndPayments(raw: any, out: Interpretation, text: string, ctx: UserContext, pend: PendingCtx | undefined, okValor: (x: number) => boolean) {
+  const old = pend?.lancamento;
+  const numerosDitos = new Set(findAmounts(text).map((a) => a.value));
+  for (const q of [old?.quantidade, ...(old?.pagamentos ?? []).map((p) => p.quantidade)]) if (q) numerosDitos.add(q);
+  const okQtd = (q: unknown): q is number => Number.isInteger(q) && (q as number) >= 1 && (q as number) <= 1000 && numerosDitos.has(q as number);
+
+  const qtd = Number(raw.quantidade);
+  if (okQtd(qtd)) out.quantidade = qtd;
+  else if (old?.quantidade) out.quantidade = old.quantidade;
+  const vu = Number(raw.valor_unitario);
+  if (Number.isFinite(vu) && vu > 0 && okValor(vu)) out.valor_unitario = r2(vu);
+  else if (old?.valor_unitario) out.valor_unitario = old.valor_unitario;
+
+  // formas de pagamento (só valem com 2 ou mais)
+  let pags: NonNullable<Interpretation["pagamentos"]> = [];
+  if (Array.isArray(raw.pagamentos)) {
+    for (const p of raw.pagamentos.slice(0, 5)) {
+      const forma = FORMAS.includes(p?.forma_pagamento) ? p.forma_pagamento : undefined;
+      const conta = ctx.contas.find((c) => norm(c) === norm(String(p?.conta ?? "")));
+      const cartao = (ctx.cartoes ?? []).find((c) => norm(c) === norm(String(p?.cartao ?? "")));
+      if (!forma && !conta && !cartao) continue;
+      const q = Number(p?.quantidade), v = Number(p?.valor);
+      pags.push({
+        forma_pagamento: forma ?? (cartao ? "credito" : undefined), conta, cartao,
+        quantidade: okQtd(q) ? q : undefined,
+        valor: Number.isFinite(v) && v > 0 && okValor(v) ? r2(v) : undefined,
+      });
+    }
+  }
+  // respondendo a um lançamento em andamento sem repetir as formas: mantém as que já estavam
+  if (pags.length < 2 && (old?.pagamentos?.length ?? 0) >= 2) pags = old!.pagamentos!.map((p) => ({ ...p }));
+  if (pags.length < 2) pags = [];
+
+  if (out.valor_unitario !== undefined) {
+    // preço por unidade: total = unidades x preço (as unidades de cada forma, se ditas)
+    const somaQ = pags.reduce((s, p) => s + (p.quantidade ?? 0), 0);
+    const q = out.quantidade ?? (somaQ || undefined);
+    if (q) { out.quantidade = q; out.valor = r2(q * out.valor_unitario); }
+    for (const p of pags) if (p.quantidade) p.valor = r2(p.quantidade * out.valor_unitario);
+  }
+  if (pags.length) {
+    const sem = pags.filter((p) => p.valor === undefined);
+    const soma = pags.reduce((s, p) => s + (p.valor ?? 0), 0);
+    if (!sem.length) out.valor = r2(soma);
+    else if (out.valor !== undefined && sem.length === 1 && out.valor > soma) sem[0].valor = r2(out.valor - soma);   // "100 no débito e o resto no crédito"
+    else if (out.valor !== undefined && sem.length === pags.length && pags.every((p) => p.quantidade)) {
+      // total dito + unidades de cada forma: reparte proporcionalmente (centavos que sobram vão para a última)
+      const tq = pags.reduce((s, p) => s + p.quantidade!, 0);
+      let resto = Math.round(out.valor * 100);
+      pags.forEach((p, k) => {
+        const cts = k === pags.length - 1 ? resto : Math.round(Math.round(out.valor! * 100) * p.quantidade! / tq);
+        p.valor = cts / 100; resto -= cts;
+      });
+      if (!out.quantidade) out.quantidade = tq;
+    }
+    out.pagamentos = pags;
+    if (out.forma_pagamento && pags.some((p) => p.forma_pagamento && p.forma_pagamento !== out.forma_pagamento)) out.forma_pagamento = undefined;
+  }
+  // quantidade com preço ainda não dito: o "valor" que a IA tirou da frase é, na verdade, uma das quantidades
+  if (out.valor_unitario === undefined && out.quantidade && out.valor !== undefined && !pags.length
+      && out.valor <= out.quantidade && Number.isInteger(out.valor) && !findAmounts(text).some((a) => a.role === "valor" && a.strength >= 3)) {
+    out.valor = undefined;
+  }
+  if (pags.length && pags.some((p) => p.valor === undefined) && out.valor !== undefined && pend?.lancamento.valor !== out.valor
+      && !findAmounts(text).some((a) => a.role === "valor" && Math.abs(a.value - out.valor!) < 0.005 && a.strength >= 2)) {
+    out.valor = undefined;
+  }
 }
 
 const GROQ_MODEL = "llama-3.3-70b-versatile";
@@ -222,7 +324,7 @@ export async function interpretWithAI(text: string, ctx: UserContext, cfg: AiCon
       const merged: any[] = [];
       for (const x of contents) { const last = merged[merged.length - 1]; if (last && last.role === x.role) last.parts[0].text += "\n" + x.parts[0].text; else merged.push(x); }
       if (merged[0]?.role === "model") merged.shift();
-      const { data, model } = await geminiCall(cfg, {
+      const { data, model } = await geminiPreferFull(cfg, {
         systemInstruction: { parts: [{ text: system }] },
         contents: merged,
         generationConfig: { responseMimeType: "application/json", temperature: 0 },
@@ -273,7 +375,10 @@ function rulesAreEnough(r: Interpretation, text: string): boolean {
 /** Junta a leitura da IA com a das regras: a IA entende o sentido; os números ditos valem pelo texto. */
 export function mergeAI(ai: Interpretation, rules: Interpretation): Interpretation {
   const out: Interpretation = { ...ai };
-  if (rules.valor !== undefined && (ai.valor === undefined || (rules.alternativas?.length ?? 0) > 1)) { out.valor = rules.valor; out.alternativas = rules.alternativas; }
+  // compra por unidade / em várias formas: o valor é calculado a partir do que a IA separou; as regras
+  // confundiriam uma quantidade ("2 com dinheiro") com o preço
+  const porUnidade = (ai.quantidade ?? 0) > 1 || (ai.pagamentos?.length ?? 0) > 1 || ai.valor_unitario !== undefined;
+  if (!porUnidade && rules.valor !== undefined && (ai.valor === undefined || (rules.alternativas?.length ?? 0) > 1)) { out.valor = rules.valor; out.alternativas = rules.alternativas; }
   if (rules.parcelas && !ai.parcelas) out.parcelas = rules.parcelas;
   if (!ai.data && rules.data) { out.data = rules.data; out.data_explicita = rules.data_explicita; }
   if (!ai.periodo && rules.periodo) out.periodo = rules.periodo;
@@ -281,7 +386,7 @@ export function mergeAI(ai: Interpretation, rules: Interpretation): Interpretati
   if (!out.estabelecimento && rules.estabelecimento) out.estabelecimento = rules.estabelecimento;
   if (!out.cartao && rules.cartao && out.forma_pagamento !== "pix" && out.forma_pagamento !== "dinheiro") out.cartao = rules.cartao;
   if (!out.conta && rules.conta && !out.cartao) out.conta = rules.conta;
-  if (!out.forma_pagamento && rules.forma_pagamento) out.forma_pagamento = rules.forma_pagamento;
+  if (!out.forma_pagamento && rules.forma_pagamento && !out.pagamentos?.length) out.forma_pagamento = rules.forma_pagamento;
   if (rules.frequencia && !out.frequencia) { out.frequencia = rules.frequencia; out.dia = rules.dia; out.dia_util = rules.dia_util; }
   // divisão: a IA decide SE é dividido (entende "dividido em 4 parcelas" e "é só meu"); valores ditos vêm das regras se a IA não pegou
   if (ai.dividir === true && !ai.partes?.length && rules.partes?.length) out.partes = rules.partes;

@@ -129,6 +129,18 @@ export function findAmounts(text: string): AmountCandidate[] {
     cands.push({ value: parsed.value, alt: parsed.alt, start: i, end: j, strength, role });
     i = j + 1;
   }
+  // "comprei 5 cervejas, 3 delas no Pix e 2 com dinheiro": depois de uma quantidade, um número pequeno
+  // seguido da forma de pagamento (ou de "delas/deles") também é quantidade, não valor
+  const qtd = cands.filter((x) => x.role === "outro" && Number.isInteger(x.value) && /^[a-z]{3,}s$/.test(toks[x.end + 1]?.t ?? ""));
+  if (qtd.length) {
+    const max = Math.max(...qtd.map((x) => x.value));
+    for (const x of cands) {
+      if (x.role !== "valor" || x.strength >= 3 || !Number.isInteger(x.value) || x.value > max || x.start < qtd[0].start) continue;
+      const a = toks[x.end + 1]?.t ?? "", b = toks[x.end + 2]?.t ?? "", d = toks[x.end + 3]?.t ?? "";
+      const PAG = /^(pix|dinheiro|especie|cartao|debito|credito|boleto|vista)$/;
+      if (/^(delas|deles|unidades?)$/.test(a) || (/^(com|no|na|em|via|pelo|pela|de|do|da|a)$/.test(a) && (PAG.test(b) || PAG.test(d)))) x.role = "outro";
+    }
+  }
   return cands;
 }
 

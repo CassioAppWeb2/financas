@@ -30,7 +30,7 @@ export interface AssistantDeps {
 
 interface ImportDest { cartao?: string; conta?: string; }
 
-export interface QueueItem { texto: string; data?: string; }
+export interface QueueItem { texto: string; data?: string; /** lançamento já entendido (parte de uma compra paga de formas diferentes) */ interp?: Interpretation; }
 
 type Pending = (
   | { kind: "ask_value"; interp: Interpretation }
@@ -291,6 +291,13 @@ async function processQueue(itens: QueueItem[], c: Ctx, chatMessageId: string): 
   const cards: Card[] = [];
   for (let k = 0; k < itens.length; k++) {
     const it = itens[k];
+    if (it.interp) {
+      // partes da mesma compra: não confundir a 2ª com uma repetição da 1ª
+      const o = await createFlow(it.interp, c, { valor_confirmado: true, parte: true, ...(k > 0 ? { forcar: true } : {}) });
+      replies.push(`• ${o.reply}`); cards.push(...(o.cards ?? []));
+      if (o.pending) return { reply: replies.join("\n"), cards, pending: { ...o.pending, fila: itens.slice(k + 1) } };
+      continue;
+    }
     const interp = await interpret(it.texto, c.uc, c.deps.ai, c.history);
     if (it.data && !interp.data_explicita && CREATE_INTENTS.has(interp.intent)) { interp.data = it.data; interp.data_explicita = true; }
     const log = await c.deps.db.rpc<{ id: string }>("fe_log_interpretation", c.user, {
@@ -418,10 +425,26 @@ function categoryList(c: Ctx, tipo: string): string {
 
 async function createFlow(i: Interpretation, c: Ctx, extra: Record<string, unknown> = {}): Promise<Outcome> {
   const tipo = i.tipo ?? "despesa";
-  if (i.valor === undefined) {
+  const pags = i.pagamentos && i.pagamentos.length >= 2 && !extra.parte ? i.pagamentos : null;
+  if (i.valor === undefined || (pags && pags.some((p) => p.valor === undefined))) {
+    if ((i.quantidade ?? 0) > 1 || pags) {
+      // compra por unidade: pergunta o preço de cada uma (ou o total)
+      const coisa = (i.descricao || "item").toLowerCase();
+      const formas = pags ? ` — ${pags.map((p) => `${p.quantidade ? `${p.quantidade} ` : ""}${formaLabel(p)}`).join(" e ")}` : "";
+      return {
+        reply: `Entendi${i.quantidade ? ` **${i.quantidade}** ${coisa}` : ` a compra (${coisa})`}${formas}. 🙂\nQuanto custou ${i.quantidade ? "cada uma" : "cada parte"}? Pode dizer o preço da unidade (ex.: *12 cada*) ou o *total*.`,
+        pending: { kind: "ask_value", interp: { ...i, valor: undefined } },
+      };
+    }
     const what = i.descricao ? ` (${i.descricao})` : "";
     const audio = c.msg.type === "audio" ? "🎧 Não identifiquei o valor no áudio. " : "";
     return { reply: `${audio}Entendi ${TIPO_LABEL[tipo]}${what}. Qual foi o valor?`, pending: { kind: "ask_value", interp: i } };
+  }
+  if (pags) return multiPayFlow(i, pags, c, extra);
+  // pagou em dinheiro/Pix sem dizer a conta: usa a conta que combina com a forma de pagamento
+  if (!i.conta && !i.cartao && (tipo === "despesa" || tipo === "receita") && i.forma_pagamento && i.forma_pagamento !== "credito") {
+    const conta = await accountForPayment(i.forma_pagamento, c);
+    if (conta) Object.assign(i, { conta });
   }
   if (i.alternativas && i.alternativas.length > 1) {
     return {
@@ -500,6 +523,76 @@ async function createFlow(i: Interpretation, c: Ctx, extra: Record<string, unkno
     default:
       return { reply: "Não consegui registrar. Pode reformular?", pending: null };
   }
+}
+
+const FORMA_LABEL: Record<string, string> = { pix: "no Pix", dinheiro: "em dinheiro", debito: "no débito", credito: "no crédito", boleto: "no boleto" };
+function formaLabel(p: { forma_pagamento?: string; conta?: string; cartao?: string }): string {
+  if (p.cartao) return `no cartão ${p.cartao}`;
+  if (p.conta) return `na conta ${p.conta}`;
+  return FORMA_LABEL[p.forma_pagamento ?? ""] ?? "";
+}
+
+/** Conta que combina com a forma de pagamento: dinheiro -> conta do tipo dinheiro; Pix/débito -> conta de banco. */
+async function accountForPayment(forma: string, c: Ctx): Promise<string | undefined> {
+  if (!["dinheiro", "pix", "debito", "boleto"].includes(forma)) return undefined;
+  let contas: any[] = [];
+  try { contas = ((await c.deps.db.rpc<any>("fe_balances", c.user, {})).contas ?? []).filter((a: any) => a.status === "ativa"); } catch { return undefined; }
+  const minhas = contas.filter((a: any) => !a.membro_id || a.membro_id === c.user);
+  const base = minhas.length ? minhas : contas;
+  const padrao = base.find((a: any) => a.padrao) ?? contas.find((a: any) => a.padrao);
+  const dinheiro = (a: any) => a.tipo === "dinheiro";
+  const escolhe = (lista: any[]) => lista.length === 1 ? lista[0] : lista.find((a: any) => a.padrao);
+  if (forma === "dinheiro") {
+    if (padrao && dinheiro(padrao)) return undefined;              // a conta padrão já é a de dinheiro
+    return escolhe(base.filter(dinheiro))?.nome;
+  }
+  if (padrao && !dinheiro(padrao)) return undefined;                // a conta padrão já é de banco
+  return escolhe(base.filter((a: any) => !dinheiro(a)))?.nome;
+}
+
+/** Aplica o preço dito à compra por unidade (preço de cada uma ou total) e reparte entre as formas de pagamento. */
+function withPrice(i: Interpretation, p: { unit?: number; total?: number }): Interpretation {
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  const pags = (i.pagamentos ?? []).map((x) => ({ ...x }));
+  const q = i.quantidade ?? (pags.reduce((s, x) => s + (x.quantidade ?? 0), 0) || undefined);
+  const out: Interpretation = { ...i, quantidade: q, alternativas: undefined };
+  if (p.unit !== undefined && q) { out.valor_unitario = p.unit; out.valor = r2(q * p.unit); }
+  else out.valor = p.total ?? p.unit;
+  if (pags.length >= 2) {
+    const tq = pags.reduce((s, x) => s + (x.quantidade ?? 0), 0);
+    if (out.valor_unitario !== undefined && pags.every((x) => x.quantidade)) pags.forEach((x) => { x.valor = r2(x.quantidade! * out.valor_unitario!); });
+    else if (tq && pags.every((x) => x.quantidade)) {
+      let resto = Math.round(out.valor! * 100);
+      pags.forEach((x, k) => { const cts = k === pags.length - 1 ? resto : Math.round(Math.round(out.valor! * 100) * x.quantidade! / tq); x.valor = cts / 100; resto -= cts; });
+    }
+    out.pagamentos = pags;
+  }
+  return out;
+}
+
+/** Mesma compra paga de formas diferentes: um lançamento para cada forma. */
+async function multiPayFlow(i: Interpretation, pags: NonNullable<Interpretation["pagamentos"]>, c: Ctx, extra: Record<string, unknown>): Promise<Outcome> {
+  const itens: QueueItem[] = pags.map((p) => ({
+    texto: c.msg.content,
+    interp: {
+      ...i, pagamentos: undefined, valor: p.valor, alternativas: undefined,
+      forma_pagamento: p.forma_pagamento, conta: p.conta, cartao: p.cartao,
+      quantidade: p.quantidade,
+      descricao: p.quantidade && i.descricao ? `${i.descricao} (${p.quantidade} un.)` : i.descricao,
+    },
+  }));
+  const tipo = i.tipo ?? "despesa";
+  // a categoria vale para todas as partes: pergunta antes de lançar a primeira
+  if (!i.categoria && (tipo === "despesa" || tipo === "receita")) {
+    return {
+      reply: `Entendi ${TIPO_LABEL[tipo]} de ${brl(Math.round(i.valor! * 100))}${i.descricao ? ` (${i.descricao})` : ""}, em ${pags.length} pagamentos. Em qual categoria devo registrar?\n${categoryList(c, tipo)}`,
+      pending: { kind: "ask_category", interp: i },
+    };
+  }
+  const head = `🧾 ${i.descricao ?? "Compra"}${i.quantidade ? ` — ${i.quantidade} un.` : ""}${i.valor_unitario ? ` a ${brl(Math.round(i.valor_unitario * 100))} cada` : ""}, total **${brl(Math.round(i.valor! * 100))}**, em ${pags.length} pagamentos:`;
+  void extra;
+  const o = await processQueue(itens, c, "");
+  return { ...o, reply: `${head}\n${o.reply}` };
 }
 
 async function createdReply(r: any, i: Interpretation, c: Ctx): Promise<Outcome> {
@@ -729,6 +822,12 @@ async function resolvePending(p: Pending, c: Ctx): Promise<Outcome | null> {
     }
     case "ask_value": {
       const a = extractAmount(text);
+      const porUnidade = (p.interp.quantidade ?? 0) > 1 || (p.interp.pagamentos?.length ?? 0) > 1;
+      if (a.valor && porUnidade && !a.alternativas && (!looksLikeNewCommand(text, c.uc) || n.split(" ").length <= 5)) {
+        // perguntei o preço de cada unidade: "12" = 12 cada; "60 no total" = total
+        const total = /\b(total|tudo|ao todo|no total|todas|todos)\b/.test(n);
+        return saveFlow(withPrice(p.interp, total ? { total: a.valor } : { unit: a.valor }), c, { valor_confirmado: true });
+      }
       if (a.valor && !looksLikeNewCommand(text, c.uc)) {
         const interp = { ...p.interp, valor: a.valor, alternativas: a.alternativas };
         return saveFlow(interp, c);
